@@ -1,8 +1,7 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,15 +14,16 @@ jobs:
   release:
     name: Build and publish release
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -109,18 +109,11 @@ jobs:
         run: |
           $tag = "${{ steps.metadata.outputs.tag }}"
           $sha = "${{ github.sha }}"
-          $before = "${{ github.event.before }}"
           $branch = "${{ github.ref_name }}"
           $assetName = "${{ steps.metadata.outputs.asset_name }}"
           $sha256 = "${{ steps.assets.outputs.sha256 }}"
 
-          if ($before -and $before -notmatch "^0+$") {
-            $range = "$before..$sha"
-            $commitHashes = git log --format="%H" $range
-          } else {
-            $commitHashes = git log --format="%H" -n 20 $sha
-          }
-
+          $commitHashes = git log --format="%H" -n 20 $sha
           $changeSummary = New-Object System.Collections.Generic.List[string]
           $commitList = New-Object System.Collections.Generic.List[string]
           foreach ($commitHash in $commitHashes) {
