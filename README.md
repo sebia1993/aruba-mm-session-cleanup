@@ -1,83 +1,190 @@
-# Aruba_MM
+# Aruba MM Session Cleanup — 안전 지향 사용자 세션 정리 자동화
 
-Aruba MM Cleanup은 Aruba Mobility Master/MM에서 `profiling` Role 사용자 MAC을 조회하고, 조회 직후 자동으로 `aaa user delete mac <mac>`을 실행하는 Windows 11 운영 도구입니다. 최종 사용자용 배포 ZIP은 GUI와 웹앱 실행 경로를 함께 제공합니다.
+[![PR Validation](https://github.com/sebia1993/Aruba_MM/actions/workflows/pr-validation.yml/badge.svg?branch=main)](https://github.com/sebia1993/Aruba_MM/actions/workflows/pr-validation.yml)
 
-## Windows 11 사용 방법
+**Aruba Mobility Master/MM에서 특정 Role 사용자 세션을 조회하고, 조회 시점에 확정된 MAC만 대상으로 정리 명령을 수행한 뒤 사후 재조회로 결과를 검증하는 Windows 네트워크 운영 자동화 도구입니다.**
 
-1. GitHub Release에서 `aruba-mm-cleanup_vYYYY.MM.DD-HHMMSS_windows.zip` 파일 하나만 다운로드합니다.
-2. ZIP 파일 압축을 풉니다.
-3. GUI로 실행하려면 `gui\ArubaMMCleanupGUI.exe`를 실행합니다.
-4. 웹앱으로 실행하려면 `web\start_webapp.cmd`를 더블클릭합니다.
-5. GitHub가 자동으로 표시하는 `Source code (zip)` / `Source code (tar.gz)`는 소스 아카이브이며 일반 사용자가 실행할 파일이 아닙니다.
+이 프로젝트는 `aaa user delete mac <mac>`처럼 실제 장비 상태를 변경하는 명령을 사용합니다. 그래서 단순한 일괄 삭제보다 **대상 고정, 중복 제거, blind retry 금지, 사후 검증, 재등장 MAC 자동 재삭제 금지**를 핵심 설계 원칙으로 둡니다.
 
-## 통합 ZIP 구조
+> 실제 장비에서 사용하면 사용자 세션이 삭제됩니다. 반드시 허가된 운영 환경과 승인된 절차에서만 사용하십시오. 자동 테스트와 공개 문서는 fixture·fake connection·비식별 데이터만 사용합니다.
+
+## 한눈에 보기
+
+| 항목 | 내용 |
+|---|---|
+| 대상 | Aruba Mobility Master / MM |
+| 기본 Role | `profiling` |
+| 조회 | `show global-user-table list role <role>` |
+| 변경 명령 | `aaa user delete mac <mac>` |
+| 대상 결정 | **최초 조회 snapshot에서 파싱된 사용자 MAC만** 사용 |
+| 중복 처리 | 정규화 MAC 기준 1회만 실행 |
+| 삭제 명령 재시도 | **하지 않음** (`retry_once=False`) |
+| 성공 판정 | 명령 응답 + 삭제 후 재조회 결과를 함께 사용 |
+| 응답 불명확 | `확인 필요 / unknown`으로 보존 |
+| 재등장 MAC | `reappeared`로 기록, 자동 재삭제하지 않음 |
+| 취소 | 삭제 전 countdown, MAC 간 경계, 검증 조회 전 반영 |
+| 감사 자료 | 요약 JSON + 삭제 이력 JSONL |
+| raw 장비 출력 | 장기 저장하지 않음 |
+| 실행 경로 | Windows GUI / portable Web UI |
+| 배포 | Python 없이 실행 가능한 Windows 통합 ZIP |
+
+## 해결하려 한 운영 문제
+
+특정 Role에 잘못 남아 있는 사용자 세션을 정리할 때 운영자가 직접 MM에 접속해 MAC을 확인하고 하나씩 삭제하면 다음 문제가 생길 수 있습니다.
+
+- 조회 중 목록이 변해 **처음 확인하지 않은 MAC을 실수로 삭제**할 위험
+- 같은 MAC이 여러 줄에 나타나 **중복 삭제 명령**이 실행될 위험
+- 장비가 명령을 처리했지만 응답만 유실된 상황에서 **자동 재시도로 동일 변경을 반복**할 위험
+- CLI 응답만 보고 성공으로 판단해 실제 세션 잔존 여부를 놓치는 문제
+- 삭제 직후 다시 나타난 MAC을 무조건 재삭제해 원인 분석 기회를 잃는 문제
+- 장시간 반복 실행에서 결과·감사 이력이 불명확해지는 문제
+
+이 도구는 이를 **“조회 결과를 변경 대상 snapshot으로 고정하고, 변경 명령은 한 번만 전송하며, 별도 검증 조회로 최종 상태를 확인한다”**는 방식으로 다룹니다.
+
+## 안전 실행 흐름
+
+```mermaid
+flowchart TD
+    Q["Role 사용자 조회"] --> P["Parser로 사용자 MAC 추출"]
+    P --> S["대상 snapshot 고정 / MAC 중복 제거"]
+    S --> C{"취소 요청?"}
+    C -- Yes --> X["작업 중단 / 남은 대상 보존"]
+    C -- No --> D["MAC별 삭제 명령 1회 전송"]
+    D --> R{"응답 판정"}
+    R -- 명확한 성공 --> V["전체 대상 삭제 후 재조회"]
+    R -- 실패/불명확 --> U["unknown / 확인 필요 기록"]
+    U --> V
+    V --> A{"MAC이 남아 있거나 재등장?"}
+    A -- No --> OK["검증 완료"]
+    A -- Yes --> E["remaining / reappeared 기록"]
+    E --> N["자동 재삭제 금지"]
+```
+
+### 1. 삭제 대상은 최초 조회에서만 결정
+
+조회 명령은 다음과 같습니다.
+
+```text
+show global-user-table list role <role>
+```
+
+Parser가 사용자 MAC으로 판단한 값만 삭제 snapshot에 들어갑니다. BSSID/AP 등 다른 컬럼의 MAC-like 값은 삭제 대상으로 사용하지 않습니다. 동일 MAC이 여러 번 보이더라도 정규화 후 한 번만 처리합니다.
+
+### 2. 변경 명령은 blind retry 하지 않음
+
+```text
+aaa user delete mac <mac>
+```
+
+삭제 명령은 응답 실패 시 자동 재전송하지 않습니다. 네트워크 timeout이나 세션 단절이 **“명령 미실행”을 의미하지 않기 때문**입니다. 장비에서 이미 삭제가 처리됐는데 응답만 유실된 경우 같은 명령을 다시 보내는 것을 방지합니다.
+
+### 3. 응답만으로 최종 성공을 확정하지 않음
+
+삭제 배치가 끝나면 같은 Role 조회를 다시 수행합니다. 삭제 응답이 성공이었고 검증 조회에서 MAC이 사라진 경우에만 최종 성공으로 판단합니다.
+
+응답 실패·파싱 불확실성·검증 미완료는 정상 성공으로 승격하지 않고 `확인 필요` 상태로 남깁니다.
+
+### 4. 재등장 MAC을 자동으로 다시 삭제하지 않음
+
+삭제 성공으로 판단했던 MAC이 검증 조회에서 다시 나타나면 `reappeared_macs`로 기록합니다. 이 상태는 인증 재시도, 외부 정책, 단말 재접속 등 별도 원인 확인이 필요할 수 있으므로 자동 재삭제하지 않습니다.
+
+자세한 안전 상태 모델은 [SAFETY_MODEL.md](docs/SAFETY_MODEL.md)를 참고하십시오.
+
+## 아키텍처
+
+```mermaid
+flowchart LR
+    O["운영자"] --> UI["GUI / Web UI"]
+    UI --> RUN["MmCleanupRunner"]
+    RUN --> PARSE["Global User Table Parser"]
+    RUN --> SES["Persistent MM Session"]
+    SES --> MM["Aruba Mobility Master"]
+
+    PARSE --> SNAP["Target Snapshot"]
+    SNAP --> RUN
+    RUN --> AUDIT["Audit Summary JSON"]
+    RUN --> HIST["Deletion History JSONL"]
+```
+
+구성요소와 데이터 경계는 [ARCHITECTURE.md](docs/ARCHITECTURE.md)에 정리했습니다.
+
+## 운영 안전 장치
+
+| 위험 | 대응 |
+|---|---|
+| 조회 후 대상이 바뀜 | 최초 조회 snapshot에서 대상 MAC을 고정 |
+| 중복 MAC | 정규화 후 dedupe |
+| 명령 응답 유실 | 삭제 명령 자동 재시도 금지 |
+| 삭제가 실제 반영되지 않음 | 사후 재조회로 검증 |
+| 삭제 직후 MAC 재등장 | 기록만 하고 자동 재삭제 금지 |
+| 사용자 중단 요청 | 삭제 전·MAC 간·검증 전 취소 경계 확인 |
+| Parser가 다른 MAC-like 값을 오인 | 사용자 MAC으로 판정된 항목만 채택 |
+| 장비 raw 출력 노출 | 감사 파일에는 구조화 결과와 parser 판단만 기록 |
+| 감사 파일 저장 실패 | 네트워크 작업 결과와 분리해 warning 처리 |
+
+## 결과와 감사 이력
+
+실행 결과는 UI에서 대상별 상태로 확인할 수 있으며 결과 폴더에는 구조화된 감사 자료가 생성됩니다.
+
+```text
+outputs/
+├─ <run-directory>/
+│  └─ cleanup_summary.json
+└─ deletion_history.jsonl
+```
+
+`cleanup_summary.json`에는 조회·삭제·검증 결과와 parser 선택/제외 판단을 기록합니다. `deletion_history.jsonl`은 MAC별 실행 결과를 누적합니다. 장비의 전체 raw CLI 출력은 저장하지 않습니다.
+
+## Windows 사용
+
+GitHub Release의 통합 ZIP을 내려받아 압축 해제합니다.
 
 ```text
 README_START_HERE_KO.txt
 gui/
   ArubaMMCleanupGUI.exe
-  USER_GUIDE_KO.md
-  config/mock_scenarios/profiling_users.txt
 web/
   ArubaMMCleanupWeb.exe
   start_webapp.cmd
-  config/mock_scenarios/profiling_users.txt
 ```
 
-- 최종 Release ZIP에는 일반 사용자용 GUI와 웹앱만 포함합니다.
-- 웹앱은 PyInstaller로 빌드한 portable 실행 파일을 사용하므로 Windows 사용자가 Python/런타임을 별도로 설치하지 않아도 됩니다.
-- CLI 코드는 저장소에 유지하지만 최종 사용자용 Release ZIP에는 포함하지 않습니다.
-- SHA256 checksum은 별도 파일로 올리지 않고 GitHub Release notes 본문에 기록합니다.
+GUI:
 
-## GUI 사용 방법
+```text
+gui\ArubaMMCleanupGUI.exe
+```
 
-1. `gui\ArubaMMCleanupGUI.exe`를 실행합니다.
-2. MM IP, 계정, 암호, Role을 입력합니다. Role 기본값은 `profiling`입니다.
-3. `장비 응답 대기(초)`는 SSH 접속, 인증, 명령 응답을 기다리는 시간입니다.
-4. `1회 실행`을 누르면 조회 후 즉시 삭제 단계로 진행합니다.
-5. 주기적으로 반복하려면 `주기(초)`를 설정하고 `주기 실행 시작`을 누릅니다. `1`을 입력하면 다음 실행 대기도 1초로 적용됩니다.
-6. 장비 세션을 즉시 끊고 싶으면 `세션 연결 해제`를 누릅니다.
+웹 UI:
 
-## 웹앱 사용 방법
+```text
+web\start_webapp.cmd
+```
 
-1. `web\start_webapp.cmd`를 더블클릭합니다.
-2. 브라우저가 열리면 MM IP, 계정, 암호, Role을 입력합니다.
-3. `1회 실행`을 누르면 조회 후 즉시 삭제 단계로 진행합니다.
-4. 기본 주소는 `127.0.0.1`, 기본 포트는 `8765`입니다.
-5. 포트를 바꾸려면 명령 프롬프트에서 `web` 폴더로 이동한 뒤 `start_webapp.cmd --port 9876`처럼 실행합니다.
-6. 브라우저 자동 열기를 막으려면 `start_webapp.cmd --no-browser`를 사용합니다.
-7. smoke 검증은 `start_webapp.cmd --smoke`로 실행합니다.
+웹 UI 기본 바인딩은 `127.0.0.1:8765`입니다. 외부 인터페이스에 공개하는 용도로 설계하지 않았습니다.
 
-## 동작 흐름
+자세한 사용법은 [USER_GUIDE_KO.md](docs/USER_GUIDE_KO.md)를 참고하십시오.
 
-- 조회 명령: `show global-user-table list role <role>`
-- 삭제 명령: `aaa user delete mac <mac>`
-- 삭제 대상은 조회 snapshot에서 파싱된 사용자 MAC만 사용합니다.
-- GUI와 웹앱은 조회 완료 후 즉시 삭제를 시작합니다.
-- 장비 응답 대기 시간은 `장비 응답 대기(초)` 입력값으로 조절합니다.
-- 같은 MAC이 여러 줄에서 발견되어도 정규화된 MAC 기준으로 삭제 명령은 한 번만 실행합니다.
-- GUI 상단 카드는 `누적 조회 MAC`, `누적 삭제 완료`, `작업 상태`만 표시합니다.
-- `누적 조회 MAC`은 앱 실행 이후 조회된 중복 제거 삭제 대상 MAC의 작업 건수 누계입니다.
-- `누적 삭제 완료`는 삭제 후 검증 조회에서 사라진 MAC의 작업 건수 누계입니다.
-- `작업 상태`는 조회/삭제 처리 상태와 다음 주기 실행 대기를 한 곳에서 표시합니다.
-- `삭제 대상 및 결과`와 `최근 삭제 이력`의 `MAC` 셀을 클릭하면 해당 MAC을 클립보드에 복사하고 중앙 팝업을 1초 표시합니다.
-- 삭제 명령은 응답 실패 시 재시도하지 않고 `확인 필요`로 기록합니다. 장비에 명령이 들어갔지만 응답만 실패한 경우 같은 MAC 삭제 명령이 재전송되지 않게 하기 위한 정책입니다.
-- 삭제 응답이 성공이고 삭제 후 검증 조회에서 사라진 MAC만 최종 삭제 성공으로 확정합니다.
-- 조회 결과의 `Type` 값이 `N/A`인 MAC은 자동 삭제를 계속 진행하되, 결과 테이블과 로그에 `Type=N/A: 관리자 직접 장비 지정 필요` 메시지를 남깁니다.
-- BSSID/AP 등 다른 컬럼의 MAC-like 값은 삭제 대상으로 사용하지 않습니다.
-- 삭제 후 같은 조회 명령을 다시 실행해 상세 결과 테이블에서 남은 MAC과 실패/확인 필요 상태를 표시합니다.
-- 삭제 성공으로 기록된 MAC이 검증 조회에서 다시 발견되면 `재조회됨`으로 강조하고 audit JSON에 `reappeared_macs`로 남깁니다. 이 경우 자동 재삭제는 하지 않습니다.
-- GUI는 프로그램이 실행되는 동안 MM 세션을 유지하고 같은 접속 정보에서는 다음 실행에도 재사용합니다.
-- 접속 정보가 바뀌거나 `세션 연결 해제`를 누르거나 프로그램을 종료하면 세션을 닫습니다.
-- 실행 중 창을 닫으면 네트워크 timeout을 기다리지 않고 UI 종료를 진행하고, 남은 세션 정리는 백그라운드에서 처리합니다.
-- 주기 실행 중에는 대기 시간에도 수동 1회 실행을 시작할 수 없습니다.
-- 주기 실행 정지와 `이번 삭제 취소`는 다음 MAC 삭제 전과 검증 조회 전에 반영됩니다.
-- 최근 삭제 이력은 UI 성능을 위해 최근 500개 행만 유지합니다.
-- 최근 삭제 이력은 결과 폴더의 `deletion_history.jsonl`에 저장되고 프로그램 재시작 시 복원됩니다.
-- 최근 삭제 이력은 `이력 전체 지우기` 버튼으로 화면에서 지울 수 있습니다.
-- 로그창은 장시간 실행 중에도 최근 1000줄만 유지합니다.
-- raw 장비 출력은 저장하지 않고 실행 요약 JSON에는 parser 선택/제외 reason만 저장합니다.
-- 실행 요약 JSON 저장에 실패해도 조회/삭제 결과는 UI에 표시하고 warning 로그를 남깁니다.
+## 검증 체계
+
+PR 검증은 Windows runner에서 다음 흐름을 수행합니다.
+
+```text
+validation
+   ↓
+pytest / compile / package checks
+   ↓
+Windows GUI + Web 통합 패키지 빌드
+   ↓
+GUI smoke
+   ↓
+Web smoke
+   ↓
+release package verifier
+```
+
+실제 MM에 접속하는 검증과 자동 테스트는 분리합니다. CI는 fake connection과 fixture만 사용하며 실제 운영 세션을 삭제하지 않습니다.
+
+상세한 검증 범위와 “자동 검증으로 증명할 수 없는 것”은 [VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md)를 참고하십시오.
 
 ## 로컬 개발
 
@@ -88,15 +195,27 @@ python -m pytest
 python -m compileall src
 ```
 
-Windows 패키지 빌드:
+Windows 패키지 검증:
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\validate.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_windows_gui_exe.ps1
-python .\tools\verify_release_package.py --dist .\dist --smoke-gui --smoke-web
+python .\tools\verify_release_package.py --dist .\dist --smoke-gui --smoke-web --require-gui-smoke --require-web-smoke
 ```
 
-macOS에서는 Windows EXE smoke test가 건너뛰어집니다. 최종 EXE 검증은 Windows 11 PC 또는 GitHub Actions Windows runner에서 수행해야 합니다.
+개발·변경 원칙은 [DEVELOPMENT.md](DEVELOPMENT.md)를 참고하십시오.
 
-## 보안 주의
+## 범위 밖
 
-이 프로그램은 실제 사용자 세션을 삭제하는 운영 도구입니다. 실제 MM 접속 테스트는 운영자가 명시적으로 실행해야 하며, Codex/자동 테스트는 fixture와 fake connection만 사용합니다.
+이 프로젝트는 다음을 목표로 하지 않습니다.
+
+- 사용자 세션 삭제 외의 MM 설정 변경 자동화
+- 삭제 명령의 무조건 재시도
+- 재등장 MAC의 자동 반복 삭제
+- raw 장비 출력의 장기 저장
+- 인터넷 공개형 Web UI
+- 승인되지 않은 운영 환경에서의 자동 실행
+
+## 보안
+
+실제 장비 주소, 계정, 암호, MAC, 내부 Role 이름, 운영망 출력은 공개 저장소에 올리지 않습니다. 취약점이나 민감정보 노출 문제는 공개 이슈에 원문 데이터를 첨부하지 말고 [SECURITY.md](.github/SECURITY.md)의 기준을 따라야 합니다.
