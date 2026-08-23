@@ -6,34 +6,29 @@ from pathlib import Path
 from typing import Optional
 
 from .cleanup import MmCleanupRunner, build_query_command
-from .models import CleanupSettings, MmConnectionConfig
+from .hostkeys import HostKeyObservation
+from .models import CleanupPlan, CleanupSettings, MmConnectionConfig
+from .validation import validate_host, validate_username
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="aruba-mm-cleanup", description="Aruba MM profiling-role MAC cleanup.")
     parser.add_argument("--host", required=True, help="Aruba MM host or IP")
     parser.add_argument("--username", required=True, help="SSH username")
-    parser.add_argument("--password", help="SSH password; prompts when omitted")
-    parser.add_argument("--enable-password", default="", help="optional enable password")
     parser.add_argument("--port", type=int, default=22, help="SSH port")
     parser.add_argument("--role", default="profiling", help="role to query and clean")
     parser.add_argument("--timeout", type=int, default=60, help="device response timeout seconds")
     parser.add_argument("--delay", type=int, default=60, help="countdown seconds between query and delete")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"), help="audit output directory")
-    parser.add_argument("--yes", action="store_true", help="run without an interactive pre-countdown confirmation")
     args = parser.parse_args(argv)
     try:
-        host = args.host.strip()
-    except Exception:
-        parser.error("--host must not be empty")
-    if not host:
-        parser.error("--host must not be empty")
+        host = validate_host(args.host)
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
-        username = args.username.strip()
-    except Exception:
-        parser.error("--username must not be empty")
-    if not username:
-        parser.error("--username must not be empty")
+        username = validate_username(args.username)
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         role = args.role.strip() or "profiling"
     except Exception:
@@ -42,6 +37,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--port must be between 1 and 65535")
     if args.timeout < 1:
         parser.error("--timeout must be at least 1")
+    if args.timeout > 600:
+        parser.error("--timeout must not exceed 600")
     if args.delay < 0:
         parser.error("--delay must be at least 0")
     try:
@@ -50,31 +47,47 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error(str(exc))
 
     try:
-        password = args.password if args.password is not None else getpass.getpass("Password: ")
+        password = getpass.getpass("SSH password: ")
+        enable_password = getpass.getpass("Enable password (Enter to skip): ")
     except (EOFError, KeyboardInterrupt):
         print("Canceled before password input.")
         return 1
-    if not args.yes:
-        try:
-            answer = input(
-                f"Query role '{args.role}' on {args.host}, then auto-delete after {args.delay}s countdown. Continue? [y/N] "
-            )
-        except (EOFError, KeyboardInterrupt):
-            print("Canceled before query.")
-            return 1
-        if answer.strip().casefold() not in {"y", "yes"}:
-            print("Canceled before query.")
-            return 1
+    if not password:
+        print("Canceled before password input.")
+        return 1
 
     config = MmConnectionConfig(
         host=host,
         username=username,
         password=password,
         port=args.port,
-        enable_password=args.enable_password,
+        enable_password=enable_password,
     )
     settings = CleanupSettings(role=role, timeout=args.timeout, delete_delay_seconds=args.delay)
-    runner = MmCleanupRunner()
+    def approve_host_key(observation: HostKeyObservation) -> bool:
+        print("Unknown SSH server key:")
+        print(
+            f"  endpoint={observation.host}:{observation.port} "
+            f"type={observation.key_type} fingerprint={observation.fingerprint}"
+        )
+        try:
+            answer = input("Type TRUST to save this fingerprint in the app known_hosts: ")
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer.strip() == "TRUST"
+
+    runner = MmCleanupRunner(host_key_approval_callback=approve_host_key)
+
+    def approve_targets(plan: CleanupPlan) -> bool:
+        print(f"Deletion preview: role={plan.role}, targets={len(plan.target_macs)}")
+        for mac in plan.target_macs:
+            print(f"  - {mac}")
+        phrase = f"DELETE {len(plan.target_macs)}"
+        try:
+            answer = input(f"Type {phrase} to approve exactly this snapshot: ")
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer.strip() == phrase
 
     def progress(event: str, payload: dict[str, object]) -> None:
         if event == "countdown":
@@ -83,7 +96,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"{event}: {_safe_output_text(payload)}")
 
     try:
-        summary = runner.run_once(config, settings, output_dir=args.output_dir.expanduser(), progress_callback=progress)
+        summary = runner.run_once(
+            config,
+            settings,
+            output_dir=args.output_dir.expanduser(),
+            progress_callback=progress,
+            approve_targets=approve_targets,
+        )
     except Exception as exc:
         print(f"Run error: {_exception_text(exc)}")
         return 1
@@ -96,6 +115,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     audit_error = _summary_value(summary, "audit_error", "")
     history_error = _summary_value(summary, "history_error", "")
     error = _summary_value(summary, "error", "summary unavailable")
+    canceled = _summary_value(summary, "canceled", False)
     print(f"Queried: {_safe_output_text(queried_count)}")
     print(f"Deleted: {_safe_output_text(delete_success_count)}")
     print(f"Failed: {_safe_output_text(delete_failure_count)}")
@@ -106,7 +126,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Audit warning: {_safe_output_text(audit_error)}")
     if _safe_truthy(history_error):
         print(f"History warning: {_safe_output_text(history_error)}")
-    return 1 if _safe_truthy(error) or _safe_truthy(delete_failure_count) or _safe_truthy(reappeared_count) else 0
+    if _safe_truthy(canceled):
+        print("Canceled before deletion approval.")
+    return (
+        1
+        if _safe_truthy(error)
+        or _safe_truthy(canceled)
+        or _safe_truthy(delete_failure_count)
+        or _safe_truthy(reappeared_count)
+        else 0
+    )
 
 
 def _summary_value(summary: object, name: str, default: object) -> object:

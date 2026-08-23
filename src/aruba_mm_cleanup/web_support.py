@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from .cleanup import build_query_command
 from .models import CleanupRunSummary, CleanupSettings, MmConnectionConfig, _safe_text
+from .validation import validate_host, validate_username
 
 
 @dataclass(frozen=True)
 class WebRunRequest:
     host: str
     username: str
-    password: str
-    enable_password: str
+    password: str = field(repr=False)
+    enable_password: str = field(repr=False)
     port: int
     role: str
     timeout: int
@@ -27,13 +28,8 @@ def parse_run_request(
     *,
     default_output_dir: Path = Path("outputs"),
 ) -> WebRunRequest:
-    host = _form_text(form, "host").strip()
-    if not host:
-        raise ValueError("MM 주소를 입력하세요.")
-
-    username = _form_text(form, "username").strip()
-    if not username:
-        raise ValueError("계정을 입력하세요.")
+    host = validate_host(_form_text(form, "host"))
+    username = validate_username(_form_text(form, "username"))
 
     password = _form_text(form, "password")
     if not password:
@@ -50,6 +46,8 @@ def parse_run_request(
         raise ValueError("SSH 포트는 1~65535 사이여야 합니다.")
 
     timeout = _positive_int(_form_text(form, "timeout").strip() or "60", "장비 응답 대기")
+    if timeout > 600:
+        raise ValueError("장비 응답 대기는 1~600초 사이여야 합니다.")
 
     output_dir_text = _form_text(form, "output_dir").strip()
     output_dir = Path(output_dir_text) if output_dir_text else default_output_dir

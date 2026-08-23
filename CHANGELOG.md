@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- SSH 서버 키 최초 승인과 앱 known_hosts pinning을 추가하고 변경된 키를 차단합니다.
+- MM/Mobility Conductor/WLC 신원 또는 페이징 해제 상태를 확인할 수 없으면 삭제하지 않습니다.
+- 1회·주기 실행 모두 target snapshot 미리보기와 매 회 명시 승인을 요구합니다.
+- Role·접속 입력 검증, password repr 차단, CLI 평문 password option 제거를 적용합니다.
+- Web UI를 loopback 전용 조회→미리보기→확인 흐름으로 바꾸고 Host/CSRF/요청 크기/fresh snapshot 검사를 추가합니다.
+- Runner 동시 실행 잠금과 fail-closed 합성 테스트를 추가합니다.
+- runtime hash lock, ruff, Bandit, pip-audit, CycloneDX SBOM 및 `main` push CI를 추가합니다.
+- Release 자산을 semver tag 기반 Windows ZIP, SHA-256 sidecar, CycloneDX SBOM으로 표준화합니다.
+- MIT License, 보안 정책, 한국어 README와 자동 검증 한계를 정리합니다.
+
 ## 0.1.0
 
 - Windows 11 통합 ZIP에 GUI 실행 경로와 웹앱 실행 경로를 함께 제공합니다.

@@ -2,9 +2,9 @@ show global-user-table list role profiling
 Global User Table
 -----------------
 IP              MAC Address          User          Role        VLAN  BSSID
-10.10.10.11     aa:bb:cc:00:40:01    user-a        profiling   20    11:22:33:44:55:66
-10.10.10.12     aa:bb:cc:00:40:02    user-b        employee    30    22:33:44:55:66:77
-user-c          10.10.10.13          aa-bb-cc-00-40-03 profiling 20 ap-01 33:44:55:66:77:88
-10.10.10.14     aa:bb:cc:00:40:03    user-c        profiling   20    44:55:66:77:88:99
+198.51.100.11     aa:bb:cc:00:40:01    user-a        profiling   20    11:22:33:44:55:66
+198.51.100.12     aa:bb:cc:00:40:02    user-b        employee    30    22:33:44:55:66:77
+user-c          198.51.100.13          aa-bb-cc-00-40-03 profiling 20 ap-01 33:44:55:66:77:88
+198.51.100.14     aa:bb:cc:00:40:03    user-c        profiling   20    44:55:66:77:88:99
 ap-only         uplink               55:66:77:88:99:aa radio
 Invalid input detected at '^' marker.

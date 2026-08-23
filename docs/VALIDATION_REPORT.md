@@ -4,16 +4,16 @@
 
 ## 자동 검증 경로
 
-PR Validation은 Windows runner에서 다음 순서로 수행합니다.
+PR Validation과 `main` push validation은 Linux 품질·보안 job과 Windows 패키지 job으로 나뉩니다.
 
 ```text
-pip install -e ".[dev]" + constraints
+requirements.lock hash 검증 설치
         ↓
-pip check
+pytest / compileall / ruff
         ↓
-pytest
+Bandit / pip-audit
         ↓
-compileall src
+CycloneDX SBOM 생성·JSON parse
         ↓
 Windows GUI/Web 통합 패키지 빌드
         ↓
@@ -38,6 +38,9 @@ release package verifier
 
 ### 변경 안전성
 
+- 대상 snapshot 미리보기와 승인 없이는 삭제하지 않는 fail-closed 경로
+- Web fresh query가 승인 snapshot과 달라지면 삭제하지 않는 경로
+- 즉시·주기 실행 모두 승인 callback을 전달하는 경로
 - target snapshot에 포함된 MAC만 삭제 명령으로 변환
 - 삭제 명령 응답 실패 시 blind retry 금지
 - 삭제 결과 상태 분류
@@ -48,6 +51,10 @@ release package verifier
 
 ### 세션/실행 안정성
 
+- 앱 known_hosts 최초 키 승인, 동일 키 재사용, 변경 키 차단
+- `no paging` 실패와 잔존 paging marker 차단
+- Aruba MM/Mobility Conductor/WLC 신원 확인 및 스위치 출력 거부
+- Runner 동시 실행 잠금
 - 세션 재사용과 명시적 disconnect
 - timeout/error 처리
 - GUI 종료 시 네트워크 작업과 UI 종료의 분리
@@ -67,12 +74,21 @@ release package verifier
 - 통합 ZIP 구조
 - GUI smoke
 - Web smoke
+- ZIP SHA-256 sidecar
+- CycloneDX SBOM JSON
+
+### 입력·Web 경계
+
+- Role 허용 문자·길이와 Host/계정/포트/timeout 검증
+- 비밀번호 필드의 `repr()` 제외와 CLI 평문 password option 부재
+- loopback bind, Host header, CSRF, 요청 크기, 확인 문구
 
 ## 자동 검증이 증명하지 않는 영역
 
 CI가 green이어도 다음을 자동으로 보장하지 않습니다.
 
 - 실제 운영 MM/Managed Device의 펌웨어별 CLI 호환성
+- 실제 장비 SSH 지문을 누가 어떤 별도 경로로 확인했는지
 - 현장 AAA/ClearPass 정책에 따른 삭제 후 재인증 동작
 - 실제 운영망 latency/packet loss 상황의 모든 timeout 조합
 - 특정 Role을 삭제 대상으로 사용해도 된다는 운영 승인
@@ -86,6 +102,8 @@ CI가 green이어도 다음을 자동으로 보장하지 않습니다.
 
 | 관측 | 판정 |
 |---|---|
+| SSH 키 변경 / 신원 불일치 / 페이징 실패 | 삭제 차단 |
+| 대상 미승인 / fresh query snapshot 변경 | 삭제 차단 |
 | 삭제 응답 성공 + 검증 조회에서 MAC 없음 | 성공 |
 | 삭제 응답 실패/timeout | 확인 필요 |
 | 검증 조회에서 MAC 잔존 | 미완료/확인 필요 |

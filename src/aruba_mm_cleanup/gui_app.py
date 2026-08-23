@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 import heapq
 import json
 import os
@@ -10,14 +9,16 @@ import queue
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Optional
 
 from .cleanup import MmCleanupRunner, build_query_command
-from .models import CleanupSettings, MmConnectionConfig
+from .hostkeys import HostKeyObservation
+from .models import CleanupPlan, CleanupSettings, MmConnectionConfig
 from .parser import normalize_mac
-
+from .validation import validate_host, validate_username
 
 APP_TITLE = "Aruba MM Cleanup Dashboard"
 DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "ArubaMMCleanup" / "outputs"
@@ -50,6 +51,14 @@ LOG_BG = "#171a20"
 LOG_TEXT = "#f4f4f4"
 
 
+class _ApprovalRequest:
+    def __init__(self, kind: str, payload: object) -> None:
+        self.kind = kind
+        self.payload = payload
+        self.approved = False
+        self.done = threading.Event()
+
+
 class ArubaMmCleanupGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -66,7 +75,10 @@ class ArubaMmCleanupGui(tk.Tk):
         self.is_running = False
         self.scheduler_running = False
         self.closing = False
-        self.runner = MmCleanupRunner(persistent_session=True)
+        self.runner = MmCleanupRunner(
+            persistent_session=True,
+            host_key_approval_callback=self._confirm_host_key_from_worker,
+        )
         self.runner_lock = threading.Lock()
         self.session_close_worker: Optional[threading.Thread] = None
         self.session_close_lock = threading.Lock()
@@ -248,7 +260,7 @@ class ArubaMmCleanupGui(tk.Tk):
         ).grid(row=0, column=1, sticky="e", padx=18, pady=(16, 2))
         tk.Label(
             frame,
-            text="조회 snapshot에서 수집한 MAC만 사용하며, 조회가 끝나면 즉시 삭제 명령을 실행합니다.",
+            text="조회 snapshot의 MAC을 미리 보여주고 매 실행마다 명시 승인을 받은 뒤에만 삭제합니다.",
             bg=PANEL,
             fg=MUTED,
             font=("Segoe UI", 10),
@@ -563,6 +575,7 @@ class ArubaMmCleanupGui(tk.Tk):
             error = _safe_text(exc) or exc.__class__.__name__
             self._log(f"WARNING: 이력 로드 실패 - {error}")
         self.cancel_event.clear()
+        self.scheduler_stop_event.clear()
         self._set_running(True)
         try:
             self.worker = threading.Thread(
@@ -760,6 +773,7 @@ class ArubaMmCleanupGui(tk.Tk):
                     output_dir=output_dir,
                     progress_callback=progress,
                     should_cancel=self._should_cancel_run,
+                    approve_targets=self._confirm_targets_from_worker,
                 )
             self._enqueue_event("summary", summary)
             return True
@@ -768,10 +782,31 @@ class ArubaMmCleanupGui(tk.Tk):
             self._enqueue_event("progress", ("run_error", {"error": error}))
             return False
 
+    def _confirm_host_key_from_worker(self, observation: HostKeyObservation) -> bool:
+        return self._request_approval("host_key", observation)
+
+    def _confirm_targets_from_worker(self, plan: CleanupPlan) -> bool:
+        return self._request_approval("targets", plan)
+
+    def _request_approval(self, kind: str, payload: object) -> bool:
+        request = _ApprovalRequest(kind, payload)
+        if not self._enqueue_event("approval_request", request):
+            return False
+        deadline = time.monotonic() + 300
+        while not request.done.wait(0.1):
+            if self.closing or self.cancel_event.is_set() or self.scheduler_stop_event.is_set():
+                return False
+            if time.monotonic() >= deadline:
+                return False
+        return request.approved is True
+
     def _close_runner_session(self, *, reason: str, enqueue_progress: bool) -> None:
         progress = None
         if enqueue_progress:
-            progress = lambda event, payload: self._enqueue_event("progress", (event, payload))
+            def enqueue_runner_progress(event: str, payload: dict[str, object]) -> None:
+                self._enqueue_event("progress", (event, payload))
+
+            progress = enqueue_runner_progress
         with self.runner_lock:
             try:
                 self.runner.close_session(progress_callback=progress, reason=reason)
@@ -836,10 +871,11 @@ class ArubaMmCleanupGui(tk.Tk):
             raise ValueError("입력값을 읽을 수 없습니다.") from exc
         except Exception as exc:
             raise ValueError("입력값을 읽을 수 없습니다.") from exc
-        if not host:
-            raise ValueError("MM IP/Host를 입력하세요.")
-        if not username:
-            raise ValueError("계정을 입력하세요.")
+        try:
+            host = validate_host(host)
+            username = validate_username(username)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         if not password:
             raise ValueError("암호를 입력하세요.")
         try:
@@ -854,6 +890,8 @@ class ArubaMmCleanupGui(tk.Tk):
             raise ValueError("장비 응답 대기(초)는 숫자로 입력하세요.") from exc
         if timeout < 1:
             raise ValueError("장비 응답 대기(초)는 1 이상 숫자로 입력하세요.")
+        if timeout > 600:
+            raise ValueError("장비 응답 대기(초)는 600 이하 숫자로 입력하세요.")
         try:
             build_query_command(role)
         except ValueError as exc:
@@ -920,6 +958,8 @@ class ArubaMmCleanupGui(tk.Tk):
                         self._handle_progress(progress_event_name, progress_payload)
                     elif event == "summary":
                         self._handle_summary(payload)
+                    elif event == "approval_request":
+                        self._handle_approval_request(payload)
                     elif event == "next_run":
                         remaining = "None" if payload is None else (_safe_text(payload) or payload.__class__.__name__)
                         self._set_timer(f"{remaining}s", "다음 실행")
@@ -958,6 +998,39 @@ class ArubaMmCleanupGui(tk.Tk):
                 self._drain_after_id = self.after(150, self._drain_events)
             except Exception:
                 self._drain_after_id = None
+
+    def _handle_approval_request(self, payload: object) -> None:
+        if not isinstance(payload, _ApprovalRequest):
+            return
+        approved = False
+        try:
+            if payload.kind == "host_key" and isinstance(payload.payload, HostKeyObservation):
+                observation = payload.payload
+                approved = messagebox.askyesno(
+                    "최초 SSH 지문 승인",
+                    "다음 장비 지문을 앱 known_hosts에 저장하시겠습니까?\n\n"
+                    f"장비: {observation.host}:{observation.port}\n"
+                    f"키 유형: {observation.key_type}\n"
+                    f"지문: {observation.fingerprint}\n\n"
+                    "장비 관리자에게 별도 경로로 지문을 확인한 뒤 승인하세요.",
+                    parent=self,
+                )
+            elif payload.kind == "targets" and isinstance(payload.payload, CleanupPlan):
+                plan = payload.payload
+                target_lines = "\n".join(f"- {mac}" for mac in plan.target_macs)
+                phrase = f"DELETE {len(plan.target_macs)}"
+                answer = simpledialog.askstring(
+                    "삭제 대상 최종 승인",
+                    f"Role: {plan.role}\n대상: {len(plan.target_macs)}개\n\n{target_lines}\n\n"
+                    f"정확히 '{phrase}'를 입력하면 이 snapshot만 삭제합니다.",
+                    parent=self,
+                )
+                approved = answer == phrase
+        except Exception:
+            approved = False
+        finally:
+            payload.approved = approved
+            payload.done.set()
 
     def _handle_progress(self, event: str, payload: dict[str, object]) -> None:
         if event == "connect_start":

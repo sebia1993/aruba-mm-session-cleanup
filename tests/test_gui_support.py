@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aruba_mm_cleanup import __version__
 import aruba_mm_cleanup.gui_app as gui_app_module
+from aruba_mm_cleanup import __version__
 from aruba_mm_cleanup.gui_app import (
     ACCENT,
     APP_TITLE,
@@ -21,8 +21,8 @@ from aruba_mm_cleanup.gui_app import (
     DEFAULT_INTERVAL_SECONDS,
     DEFAULT_ROLE,
     HISTORY_FILE_NAME,
-    MAX_LOG_LINES,
     MAX_HISTORY_ROWS,
+    MAX_LOG_LINES,
     MIN_INTERVAL_SECONDS,
     SHUTDOWN_GRACE_MS,
     TEXT,
@@ -452,7 +452,7 @@ def make_input_gui():
 
 
 def test_version_and_gui_constants():
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
     assert APP_TITLE == "Aruba MM Cleanup Dashboard"
     assert ACCENT == "#3e6ae1"
     assert DANGER_ACTIVE == "#8f1d14"

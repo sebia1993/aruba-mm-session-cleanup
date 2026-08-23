@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from aruba_mm_cleanup.models import CleanupRunSummary
-from aruba_mm_cleanup.web_app import WebAppState, _render_page, main as web_main
+from aruba_mm_cleanup.web_app import WebAppState, _render_page
+from aruba_mm_cleanup.web_app import main as web_main
 from aruba_mm_cleanup.web_support import (
     cleanup_settings_from_request,
     connection_config_from_request,

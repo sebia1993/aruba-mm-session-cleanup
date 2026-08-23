@@ -13,10 +13,10 @@ from typing import Any, Optional
 class MmConnectionConfig:
     host: str
     username: str
-    password: str
+    password: str = field(repr=False)
     port: int = 22
     device_type: str = "aruba_os"
-    enable_password: str = ""
+    enable_password: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,22 @@ class QueryResult:
             except Exception:
                 continue
         return macs
+
+
+@dataclass(frozen=True)
+class CleanupPlan:
+    """Immutable query snapshot that must be explicitly approved before deletion."""
+
+    plan_id: str = field(repr=False)
+    created_at: datetime
+    host: str
+    port: int
+    username: str
+    role: str
+    query_command: str
+    queried_count: int
+    target_macs: tuple[str, ...]
+    query_parse_decisions: tuple[ParseDecision, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

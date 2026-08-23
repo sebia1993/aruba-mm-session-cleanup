@@ -6,7 +6,6 @@ import re
 
 from .models import ParseDecision, ParseResult, UserEntry
 
-
 _MAC_PATTERNS = (
     re.compile(r"(?i)\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b"),
     re.compile(r"(?i)\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b"),

@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import hashlib
 import os
 import platform
 import subprocess
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
-
 
 REQUIRED_FILES = {
     "README_START_HERE_KO.txt",

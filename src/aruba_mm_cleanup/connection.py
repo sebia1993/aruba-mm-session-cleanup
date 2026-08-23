@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Optional, Protocol
 
+from .hostkeys import HostKeyApproval, KnownHostStore, ensure_host_key_trusted
 from .models import MmConnectionConfig
+from .validation import validate_connection_fields, validate_timeout
 
 
 class CommandConnection(Protocol):
@@ -13,7 +15,38 @@ class CommandConnection(Protocol):
     def disconnect(self) -> None: ...
 
 
-def connect_to_mm(config: MmConnectionConfig, *, timeout: int):
+def connect_to_mm(
+    config: MmConnectionConfig,
+    *,
+    timeout: int,
+    known_hosts_store: Optional[KnownHostStore] = None,
+    host_key_approval_callback: Optional[HostKeyApproval] = None,
+):
+    host, username, password, port, enable_password = validate_connection_fields(
+        host=config.host,
+        username=config.username,
+        password=config.password,
+        port=config.port,
+        device_type=config.device_type,
+        enable_password=config.enable_password,
+    )
+    valid_timeout = validate_timeout(timeout)
+    store = known_hosts_store or KnownHostStore()
+    validated_config = MmConnectionConfig(
+        host=host,
+        username=username,
+        password=password,
+        port=port,
+        device_type=config.device_type,
+        enable_password=enable_password,
+    )
+    ensure_host_key_trusted(
+        validated_config,
+        timeout=valid_timeout,
+        store=store,
+        approval_callback=host_key_approval_callback,
+    )
+    known_hosts_path = store.ensure_file()
     try:
         from netmiko import ConnectHandler
     except ImportError as exc:  # pragma: no cover
@@ -21,20 +54,24 @@ def connect_to_mm(config: MmConnectionConfig, *, timeout: int):
 
     params = {
         "device_type": config.device_type,
-        "host": config.host,
-        "port": config.port,
-        "username": config.username,
-        "password": config.password,
-        "secret": config.enable_password or None,
-        "timeout": timeout,
-        "conn_timeout": timeout,
-        "auth_timeout": timeout,
-        "banner_timeout": timeout,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "secret": enable_password or None,
+        "timeout": valid_timeout,
+        "conn_timeout": valid_timeout,
+        "auth_timeout": valid_timeout,
+        "banner_timeout": valid_timeout,
         "fast_cli": False,
+        "ssh_strict": True,
+        "system_host_keys": False,
+        "alt_host_keys": True,
+        "alt_key_file": str(known_hosts_path),
     }
     connection = ConnectHandler(**params)
     try:
-        if config.enable_password:
+        if enable_password:
             connection.enable()
     except Exception:
         try:

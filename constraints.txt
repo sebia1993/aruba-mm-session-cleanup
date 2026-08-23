@@ -1,3 +1,8 @@
 netmiko==4.6.0
+bandit==1.8.6
+cyclonedx-bom==7.3.1
+pip-audit==2.9.0
+pip-tools==7.6.1
 pyinstaller==6.21.0
 pytest==8.4.2
+ruff==0.12.12

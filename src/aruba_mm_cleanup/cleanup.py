@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
+import secrets
 import shutil
 import threading
 import time
@@ -12,7 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from .hostkeys import HostKeyApproval, HostKeyObservation, KnownHostStore
 from .models import (
+    CleanupPlan,
     CleanupRunSummary,
     CleanupSettings,
     DeleteResult,
@@ -24,33 +26,20 @@ from .models import (
     _safe_timestamp_text,
 )
 from .parser import normalize_mac, parse_global_user_table_explained
-from .session import ConnectionFactory, MmSession
-
+from .session import ConnectionFactory, MmSession, ensure_unpaged_output
+from .validation import validate_role
 
 ProgressCallback = Callable[[str, dict[str, object]], None]
 CancelCheck = Callable[[], bool]
 SleepFunc = Callable[[float], None]
+TargetApproval = Callable[[CleanupPlan], bool]
 HISTORY_FILE_NAME = "deletion_history.jsonl"
 _HISTORY_WRITE_LOCK = threading.Lock()
 
 
 def build_query_command(role: str) -> str:
-    if not isinstance(role, str):
-        raise ValueError("Role이 올바르지 않습니다.")
-    try:
-        role_value = role.strip() or "profiling"
-    except Exception as exc:
-        raise ValueError("Role이 올바르지 않습니다.") from exc
-    try:
-        has_control_character = _has_control_character(role_value)
-    except Exception as exc:
-        raise ValueError("Role이 올바르지 않습니다.") from exc
-    if has_control_character:
-        raise ValueError("Role에는 제어 문자를 사용할 수 없습니다.")
-    try:
-        return f"show global-user-table list role {role_value}"
-    except Exception as exc:
-        raise ValueError("Role이 올바르지 않습니다.") from exc
+    role_value = validate_role(role)
+    return f"show global-user-table list role {role_value}"
 
 
 def build_delete_command(mac: str) -> str:
@@ -68,10 +57,22 @@ class MmCleanupRunner:
         session: Optional[MmSession] = None,
         persistent_session: bool = False,
         sleep_func: Optional[SleepFunc] = None,
+        known_hosts_store: Optional[KnownHostStore] = None,
+        host_key_approval_callback: Optional[HostKeyApproval] = None,
+        enforce_connection_safety: Optional[bool] = None,
     ) -> None:
-        self.session = session or MmSession(connection_factory=connection_factory)
+        self.session = session or MmSession(
+            connection_factory=connection_factory,
+            known_hosts_store=known_hosts_store,
+            host_key_approval_callback=host_key_approval_callback,
+            enforce_connection_safety=enforce_connection_safety,
+        )
         self.persistent_session = persistent_session
         self.sleep_func = sleep_func or time.sleep
+        self._run_lock = threading.Lock()
+
+    def approve_host_key(self, observation: HostKeyObservation) -> None:
+        self.session.approve_host_key(observation)
 
     def query_users(
         self,
@@ -80,6 +81,8 @@ class MmCleanupRunner:
         *,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> QueryResult:
+        if not self._run_lock.acquire(blocking=False):
+            raise RuntimeError("다른 조회 또는 삭제 작업이 실행 중입니다.")
         try:
             return self._query_users(config, settings, progress_callback=progress_callback)
         finally:
@@ -94,6 +97,7 @@ class MmCleanupRunner:
                         message=f"session close failed: {error}",
                         reason="run_complete",
                     )
+            self._run_lock.release()
 
     def _query_users(
         self,
@@ -105,8 +109,7 @@ class MmCleanupRunner:
         command = build_query_command(settings.role)
         self._emit(progress_callback, "query_start", command=command, role=settings.role)
         output = self.session.run_command(config, settings, command, progress_callback=progress_callback)
-        if not isinstance(output, str):
-            raise RuntimeError("장비 조회 응답이 올바르지 않습니다.")
+        ensure_unpaged_output(output)
         parsed = parse_global_user_table_explained(output, role_filter=settings.role)
         try:
             entries = parsed.entries
@@ -189,6 +192,31 @@ class MmCleanupRunner:
         output_dir: Path,
         progress_callback: Optional[ProgressCallback] = None,
         should_cancel: Optional[CancelCheck] = None,
+        approve_targets: Optional[TargetApproval] = None,
+    ) -> CleanupRunSummary:
+        if not self._run_lock.acquire(blocking=False):
+            raise RuntimeError("다른 조회 또는 삭제 작업이 실행 중입니다.")
+        try:
+            return self._run_once_locked(
+                config,
+                settings,
+                output_dir=output_dir,
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+                approve_targets=approve_targets,
+            )
+        finally:
+            self._run_lock.release()
+
+    def _run_once_locked(
+        self,
+        config: MmConnectionConfig,
+        settings: CleanupSettings,
+        *,
+        output_dir: Path,
+        progress_callback: Optional[ProgressCallback] = None,
+        should_cancel: Optional[CancelCheck] = None,
+        approve_targets: Optional[TargetApproval] = None,
     ) -> CleanupRunSummary:
         started_at = datetime.now()
         summary = CleanupRunSummary(started_at=started_at, role=settings.role)
@@ -209,6 +237,42 @@ class MmCleanupRunner:
             if not has_query_entries:
                 self._emit(progress_callback, "run_done", queried_count=0, remaining_count=0)
                 return self._finalize_summary(summary, output_dir=output_dir, host=config.host, progress_callback=progress_callback)
+
+            plan = CleanupPlan(
+                plan_id=secrets.token_urlsafe(24),
+                created_at=started_at,
+                host=config.host,
+                port=config.port,
+                username=config.username,
+                role=settings.role,
+                query_command=query.command,
+                queried_count=summary.queried_count,
+                target_macs=tuple(summary.target_macs),
+                query_parse_decisions=tuple(query.parse_decisions),
+            )
+            self._emit(
+                progress_callback,
+                "preview_ready",
+                count=len(plan.target_macs),
+                macs=list(plan.target_macs),
+                role=plan.role,
+            )
+            approved = False
+            if approve_targets is not None:
+                try:
+                    approved = approve_targets(plan) is True
+                except Exception:
+                    approved = False
+            if not approved:
+                summary.canceled = True
+                summary.remaining_count = summary.queried_count
+                self._emit(progress_callback, "approval_denied", count=len(plan.target_macs))
+                return self._finalize_summary(
+                    summary,
+                    output_dir=output_dir,
+                    host=config.host,
+                    progress_callback=progress_callback,
+                )
 
             if not self._countdown(settings.delete_delay_seconds, progress_callback, cancel_check):
                 summary.canceled = True

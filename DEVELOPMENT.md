@@ -10,14 +10,19 @@ Aruba MM Session Cleanup은 실제 사용자 세션을 삭제하는 명령을 �
 - `reappeared` MAC을 자동 재삭제하지 않습니다.
 - parser가 확신하지 못한 값을 성공 또는 삭제 대상으로 승격하지 않습니다.
 - 실제 장비 주소·계정·MAC·raw output을 fixture에 넣지 않습니다.
+- known_hosts, 장비 신원, 페이징, target 승인, 동시 실행 gate를 우회하지 않습니다.
 
 ## 로컬 검증
 
 ```powershell
+python -m pip install --require-hashes -r .\requirements.lock
 python -m pip install -e ".[dev]" -c .\constraints.txt
 python -m pip check
 python -m pytest
 python -m compileall src
+ruff check src tests tools
+bandit -q -ll -r src -c pyproject.toml
+python -m pip_audit -r requirements.lock --strict
 ```
 
 또는:
@@ -44,10 +49,10 @@ python .\tools\verify_release_package.py --dist .\dist --smoke-gui --smoke-web -
 
 ## 테스트 데이터
 
-테스트는 RFC 5737 문서용 주소, 임의 MAC, 합성 CLI 출력만 사용합니다. 실장비에서 복사한 원문을 그대로 커밋하지 않습니다.
+테스트는 RFC 5737 문서용 주소, 로컬 관리 MAC, 합성 CLI 출력만 사용합니다. 실장비에서 복사한 원문을 그대로 커밋하지 않습니다.
 
 ## Release
 
-문서-only 변경은 새 사용자 Release를 만들 이유가 없습니다. Release는 실제 사용자 영향이 있는 변경을 검증한 뒤 수동으로 실행하는 것을 원칙으로 합니다.
+문서-only 변경은 새 사용자 Release를 만들 이유가 없습니다. Release는 `pyproject.toml`과 `__version__`을 일치시킨 semver tag(`vX.Y.Z`)를 검증된 `main` commit에 push할 때 시작됩니다. 기존 tag와 Release는 수정·삭제하지 않습니다.
 
-Release notes에는 기능 영향, 안전성 영향, 검증 방법, 배포 artifact를 사용자 관점에서 기록합니다.
+Release notes에는 기능 영향, 안전성 영향, 검증 방법, Windows ZIP·SHA-256·CycloneDX SBOM을 사용자 관점에서 기록합니다.
