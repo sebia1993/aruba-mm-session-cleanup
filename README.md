@@ -8,6 +8,22 @@
 
 > 실제 장비에서 사용하면 사용자 세션이 삭제됩니다. 반드시 허가된 운영 환경과 승인된 절차에서만 사용하십시오. 자동 테스트와 공개 문서는 fixture·fake connection·비식별 데이터만 사용합니다.
 
+## Portfolio Snapshot
+
+| 관점 | 구현 내용 |
+|---|---|
+| 운영 문제 | 특정 Role에 남은 사용자 세션을 사람이 조회·복사·삭제·재확인하는 반복 작업을 자동화 |
+| 변경 안전성 | 최초 조회 결과를 immutable target snapshot으로 고정하고 이후 새로 나타난 MAC을 삭제 대상에 자동 포함하지 않음 |
+| 중복·재시도 제어 | MAC 정규화/deduplication 적용, 상태 변경 명령은 blind retry하지 않아 중복 실행 위험 억제 |
+| 성공 판정 | CLI 응답만 신뢰하지 않고 삭제 후 동일 Role을 다시 조회해 실제 잔존 여부까지 검증 |
+| 불확실성 처리 | 응답 유실·검증 실패는 성공으로 추정하지 않고 `unknown / 확인 필요` 상태로 보존 |
+| 감사 가능성 | 실행 요약 JSON과 MAC별 JSONL 이력을 남기되 전체 raw 장비 출력은 장기 저장하지 않음 |
+| 배포·검증 | Windows GUI/Web 통합 패키지, pytest/compile/package check, GUI/Web smoke와 release verifier 구성 |
+
+**기술 스택:** Python · SSH/CLI automation · Windows GUI · local Web UI · pytest · JSON/JSONL · GitHub Actions · Windows packaging
+
+이 프로젝트의 핵심은 단순 삭제 자동화가 아니라 **실제 장비 상태를 변경하는 네트워크 자동화에서 대상 결정, idempotency 한계, 불확실한 응답, 사후 검증을 어떻게 안전하게 다룰지 설계한 것**입니다.
+
 ## 한눈에 보기
 
 | 항목 | 내용 |
