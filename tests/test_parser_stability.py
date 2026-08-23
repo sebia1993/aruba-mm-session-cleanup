@@ -109,7 +109,7 @@ def test_parse_global_user_table_explained_handles_bad_type_slice():
     """Test that a broken Type column extraction does not drop an otherwise valid MAC row."""
     header = f"{'IP':<16}{'MAC Address':<21}{'User':<14}{'Role':<12}{'Type':<8}{'BSSID'}"
     row = BadTypeSliceLine(
-        f"{'10.1.1.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}"
+        f"{'192.0.2.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}"
     )
 
     class BadOutput(str):
@@ -183,11 +183,11 @@ def test_parse_global_user_table_explained_handles_bad_token_container():
             return self
 
         def split(self, *args, **kwargs):
-            return BadTokens(["10.1.1.10", "aa:bb:cc:00:00:01", "user-a", "profiling"])
+            return BadTokens(["192.0.2.10", "aa:bb:cc:00:00:01", "user-a", "profiling"])
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("10.1.1.10 aa:bb:cc:00:00:01 user-a profiling")]
+            return [BadTokenLine("192.0.2.10 aa:bb:cc:00:00:01 user-a profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -210,11 +210,11 @@ def test_parse_global_user_table_explained_handles_bad_role_match_container():
             return self
 
         def split(self, *args, **kwargs):
-            return BadSliceTokens(["10.1.1.10", "aa:bb:cc:00:00:01", "user-a"])
+            return BadSliceTokens(["192.0.2.10", "aa:bb:cc:00:00:01", "user-a"])
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("10.1.1.10 aa:bb:cc:00:00:01 user-a")]
+            return [BadTokenLine("192.0.2.10 aa:bb:cc:00:00:01 user-a")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -231,11 +231,11 @@ def test_parse_global_user_table_explained_handles_bad_role_lookup_token():
             return self
 
         def split(self, *args, **kwargs):
-            return [BadToken("bad"), "10.1.1.10", "aa:bb:cc:00:00:01", "user-a", "profiling"]
+            return [BadToken("bad"), "192.0.2.10", "aa:bb:cc:00:00:01", "user-a", "profiling"]
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("bad 10.1.1.10 aa:bb:cc:00:00:01 user-a profiling")]
+            return [BadTokenLine("bad 192.0.2.10 aa:bb:cc:00:00:01 user-a profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -250,11 +250,11 @@ def test_parse_global_user_table_explained_handles_bad_probable_role_token():
             return self
 
         def split(self, *args, **kwargs):
-            return ["10.1.1.10", "aa:bb:cc:00:00:01", "user-a", BadToken("profiling")]
+            return ["192.0.2.10", "aa:bb:cc:00:00:01", "user-a", BadToken("profiling")]
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("10.1.1.10 aa:bb:cc:00:00:01 user-a profiling")]
+            return [BadTokenLine("192.0.2.10 aa:bb:cc:00:00:01 user-a profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -269,11 +269,11 @@ def test_parse_global_user_table_explained_handles_bad_username_token():
             return self
 
         def split(self, *args, **kwargs):
-            return ["10.1.1.10", "aa:bb:cc:00:00:01", BadCasefoldToken("bad-user"), "profiling"]
+            return ["192.0.2.10", "aa:bb:cc:00:00:01", BadCasefoldToken("bad-user"), "profiling"]
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("10.1.1.10 aa:bb:cc:00:00:01 bad-user profiling")]
+            return [BadTokenLine("192.0.2.10 aa:bb:cc:00:00:01 bad-user profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -294,11 +294,11 @@ def test_parse_global_user_table_explained_handles_bad_entry_detail_container():
             return self
 
         def split(self, *args, **kwargs):
-            return BadSliceTokens(["10.1.1.10", "aa:bb:cc:00:00:01", "user-a", "profiling"])
+            return BadSliceTokens(["192.0.2.10", "aa:bb:cc:00:00:01", "user-a", "profiling"])
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("10.1.1.10 aa:bb:cc:00:00:01 user-a profiling")]
+            return [BadTokenLine("192.0.2.10 aa:bb:cc:00:00:01 user-a profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
@@ -322,13 +322,13 @@ def test_parse_global_user_table_explained_handles_bad_duplicate_role_token():
             return self
 
         def split(self, *args, **kwargs):
-            return BadRoleAccessTokens(["10.1.1.11", "aa:bb:cc:00:00:01", "user-b", "profiling"])
+            return BadRoleAccessTokens(["192.0.2.11", "aa:bb:cc:00:00:01", "user-b", "profiling"])
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
             return [
-                "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling",
-                DuplicateBadTokenLine("10.1.1.11 aa:bb:cc:00:00:01 user-b profiling"),
+                "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling",
+                DuplicateBadTokenLine("192.0.2.11 aa:bb:cc:00:00:01 user-b profiling"),
             ]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
@@ -381,13 +381,13 @@ def test_parse_global_user_table_explained_handles_bad_ip_lookup_token():
             return self
 
         def split(self, *args, **kwargs):
-            return [NonStringToken(), "10.1.1.10", "aa:bb:cc:00:00:01", "user-a", "profiling"]
+            return [NonStringToken(), "192.0.2.10", "aa:bb:cc:00:00:01", "user-a", "profiling"]
 
     class BadOutput(str):
         def splitlines(self, *args, **kwargs):
-            return [BadTokenLine("bad 10.1.1.10 aa:bb:cc:00:00:01 user-a profiling")]
+            return [BadTokenLine("bad 192.0.2.10 aa:bb:cc:00:00:01 user-a profiling")]
 
     result = parse_global_user_table_explained(BadOutput(""), role_filter="profiling")
 
     assert [entry.mac for entry in result.entries] == ["aa:bb:cc:00:00:01"]
-    assert result.entries[0].ip_address == "10.1.1.10"
+    assert result.entries[0].ip_address == "192.0.2.10"

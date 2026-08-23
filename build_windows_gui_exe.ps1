@@ -30,7 +30,15 @@ function Wait-ForReadableFile {
 }
 
 Write-Host "Installing runtime and build dependencies..."
-& $PythonExe -m pip install -e ".[dev]" -c ".\constraints.txt"
+& $PythonExe -m pip install --require-hashes -r ".\requirements.lock"
+if ($LASTEXITCODE -ne 0) {
+    throw "locked runtime install failed with exit code $LASTEXITCODE"
+}
+& $PythonExe -m pip install -e . --no-deps
+if ($LASTEXITCODE -ne 0) {
+    throw "project install failed with exit code $LASTEXITCODE"
+}
+& $PythonExe -m pip install pyinstaller -c ".\constraints.txt"
 if ($LASTEXITCODE -ne 0) {
     throw "pip install failed with exit code $LASTEXITCODE"
 }
@@ -55,7 +63,7 @@ $releaseGuiDir = Join-Path $releaseRoot "gui"
 $releaseWebDir = Join-Path $releaseRoot "web"
 $distGuiExe = Join-Path $distDir "$guiExeName.exe"
 $distWebExe = Join-Path $distDir "$webExeName.exe"
-$releaseZip = Join-Path $distDir "aruba-mm-cleanup_${packageTag}_windows.zip"
+$releaseZip = Join-Path $distDir "aruba-mm-session-cleanup_${packageTag}_windows.zip"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 New-Item -ItemType Directory -Force -Path $specDir | Out-Null
@@ -122,7 +130,8 @@ $startHere = @"
 Aruba MM Cleanup Windows 실행 안내
 
 1. 다운로드 파일
-- GitHub Release에서 aruba-mm-cleanup_<tag>_windows.zip 파일 하나만 다운로드하면 됩니다.
+- GitHub Release에서 aruba-mm-session-cleanup_<tag>_windows.zip 파일을 다운로드합니다.
+- 같은 Release의 .sha256 파일로 ZIP 무결성을 확인하고, sbom.cdx.json에서 포함 구성요소를 확인할 수 있습니다.
 - GitHub가 자동으로 표시하는 Source code (zip), Source code (tar.gz)는 소스 아카이브이며 일반 사용자가 실행할 파일이 아닙니다.
 
 2. GUI 실행
@@ -132,7 +141,8 @@ Aruba MM Cleanup Windows 실행 안내
 3. 웹앱 실행
 - ZIP 압축을 풉니다.
 - web\start_webapp.cmd 를 더블클릭합니다.
-- 브라우저가 열리면 장비 정보와 Role을 입력하고 1회 실행을 누릅니다.
+- 브라우저가 열리면 장비 정보와 Role을 입력해 대상을 조회합니다.
+- 표시된 대상 snapshot을 확인하고 DELETE N을 정확히 입력한 경우에만 삭제됩니다.
 
 4. 웹앱 포트/설정 변경
 - 기본 주소는 127.0.0.1, 기본 포트는 8765입니다.

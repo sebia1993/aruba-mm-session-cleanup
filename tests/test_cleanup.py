@@ -1,8 +1,8 @@
 import json
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-import sys
 from types import SimpleNamespace
 
 import aruba_mm_cleanup.cleanup as cleanup_module
@@ -245,7 +245,7 @@ def test_build_query_command_rejects_missing_role_without_attribute_error():
         raise AssertionError("build_query_command should reject missing role values")
 
 
-def test_connect_to_mm_closes_connection_when_enable_fails(monkeypatch):
+def test_connect_to_mm_closes_connection_when_enable_fails(monkeypatch, tmp_path):
     class EnableFailingConnection(FakeConnection):
         def enable(self):
             raise RuntimeError("enable failed")
@@ -258,6 +258,8 @@ def test_connect_to_mm_closes_connection_when_enable_fails(monkeypatch):
         return connection
 
     monkeypatch.setitem(sys.modules, "netmiko", SimpleNamespace(ConnectHandler=fake_connect_handler))
+    monkeypatch.setattr("aruba_mm_cleanup.connection.ensure_host_key_trusted", lambda *_args, **_kwargs: None)
+    known_hosts_store = SimpleNamespace(ensure_file=lambda: tmp_path / "known_hosts")
 
     config = MmConnectionConfig(
         host="192.0.2.10",
@@ -267,7 +269,7 @@ def test_connect_to_mm_closes_connection_when_enable_fails(monkeypatch):
     )
 
     try:
-        connect_to_mm(config, timeout=7)
+        connect_to_mm(config, timeout=7, known_hosts_store=known_hosts_store)
     except RuntimeError as exc:
         assert str(exc) == "enable failed"
     else:
@@ -280,13 +282,18 @@ def test_connect_to_mm_closes_connection_when_enable_fails(monkeypatch):
     assert captured_params["conn_timeout"] == 7
     assert captured_params["auth_timeout"] == 7
     assert captured_params["banner_timeout"] == 7
+    assert captured_params["ssh_strict"] is True
+    assert captured_params["alt_host_keys"] is True
     assert captured_params["fast_cli"] is False
 
 
 def test_session_disconnect_failure_is_reported_and_session_is_cleared():
     connection = FailingDisconnectConnection()
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -303,7 +310,10 @@ def test_session_disconnect_failure_is_reported_and_session_is_cleared():
 def test_session_disconnect_unprintable_failure_is_reported_and_session_is_cleared():
     connection = UnprintableDisconnectConnection()
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -337,7 +347,10 @@ def test_session_disconnect_waits_for_inflight_command():
             disconnected.set()
 
     connection = BlockingConnection(responses={"no paging": "", command: ""})
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
     result = {}
@@ -371,7 +384,10 @@ def test_session_disconnect_waits_for_inflight_command():
 def test_session_rejects_invalid_connection_object_and_clears_state():
     connection = MissingCommandConnection()
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)  # type: ignore[arg-type]
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,  # type: ignore[arg-type]
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -396,7 +412,10 @@ def test_session_rejects_invalid_connection_object_and_clears_state():
 def test_session_cleans_up_when_command_attribute_check_fails():
     connection = FailingCommandAttributeConnection()
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)  # type: ignore[arg-type]
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,  # type: ignore[arg-type]
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -421,7 +440,10 @@ def test_session_cleans_up_when_command_attribute_check_fails():
 def test_session_invalid_connection_unprintable_cleanup_failure_is_reported_and_rejected():
     connection = InvalidUnprintableDisconnectConnection()
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)  # type: ignore[arg-type]
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,  # type: ignore[arg-type]
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -454,7 +476,10 @@ def test_session_no_paging_unprintable_failure_warns_and_allows_command():
     command = "show version"
     connection = FakeConnection(responses={command: "ok"}, failures={"no paging": BadErrorText()})
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connection)
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -476,7 +501,7 @@ def test_query_users_keeps_result_when_session_close_fails():
             self.disconnect_called = False
 
         def run_command(self, *_args, **_kwargs):
-            return "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+            return "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
 
         def disconnect(self, *_args, **_kwargs):
             self.disconnect_called = True
@@ -578,7 +603,7 @@ def test_query_users_progress_tolerates_failing_parse_result_fields(monkeypatch)
 
 
 def test_run_once_deletes_snapshot_and_verifies_remaining(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
     verify_query = ""
     connection = FakeConnection(
         responses={
@@ -592,6 +617,7 @@ def test_run_once_deletes_snapshot_and_verifies_remaining(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -599,6 +625,7 @@ def test_run_once_deletes_snapshot_and_verifies_remaining(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=1),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -651,6 +678,7 @@ def test_run_once_tolerates_query_entries_length_failure(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.error == ""
@@ -660,13 +688,13 @@ def test_run_once_tolerates_query_entries_length_failure(tmp_path):
 
 
 def test_run_once_records_partial_delete_failure(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
             "show global-user-table list role profiling": [
                 first_query,
-                "10.1.1.11 aa:bb:cc:00:00:02 user-b profiling",
+                "192.0.2.11 aa:bb:cc:00:00:02 user-b profiling",
             ],
             "aaa user delete mac aa:bb:cc:00:00:01": "User deleted",
             "aaa user delete mac aa:bb:cc:00:00:02": "Error: not found",
@@ -675,6 +703,7 @@ def test_run_once_records_partial_delete_failure(tmp_path):
     connections = [connection]
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -682,6 +711,7 @@ def test_run_once_records_partial_delete_failure(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.delete_success_count == 1
@@ -693,7 +723,7 @@ def test_run_once_records_partial_delete_failure(tmp_path):
 
 
 def test_run_once_zero_delete_delay_starts_delete_after_countdown_zero(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -704,6 +734,7 @@ def test_run_once_zero_delete_delay_starts_delete_after_countdown_zero(tmp_path)
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -711,6 +742,7 @@ def test_run_once_zero_delete_delay_starts_delete_after_countdown_zero(tmp_path)
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -725,7 +757,7 @@ def test_run_once_cancels_when_delete_delay_conversion_fails(tmp_path):
         def __int__(self):
             raise RuntimeError("bad delay")
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -735,6 +767,7 @@ def test_run_once_cancels_when_delete_delay_conversion_fails(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -745,6 +778,7 @@ def test_run_once_cancels_when_delete_delay_conversion_fails(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         summary_settings,
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -761,7 +795,7 @@ def test_run_once_reports_type_na_macs_without_blocking_delete(tmp_path):
     first_query = "\n".join(
         [
             header,
-            f"{'10.1.1.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}",
+            f"{'192.0.2.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}",
         ]
     )
     connection = FakeConnection(
@@ -774,6 +808,7 @@ def test_run_once_reports_type_na_macs_without_blocking_delete(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -781,6 +816,7 @@ def test_run_once_reports_type_na_macs_without_blocking_delete(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -795,8 +831,8 @@ def test_run_once_reports_type_na_macs_without_blocking_delete(tmp_path):
 
 
 def test_run_once_flags_successfully_deleted_mac_that_reappears(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
-    verify_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
+    verify_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -808,6 +844,7 @@ def test_run_once_flags_successfully_deleted_mac_that_reappears(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -815,6 +852,7 @@ def test_run_once_flags_successfully_deleted_mac_that_reappears(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -872,7 +910,7 @@ def test_reappeared_deleted_macs_tolerates_unreadable_items():
 
 
 def test_run_once_verification_handles_malformed_delete_result_mac(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -881,6 +919,7 @@ def test_run_once_verification_handles_malformed_delete_result_mac(tmp_path):
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
@@ -897,6 +936,7 @@ def test_run_once_verification_handles_malformed_delete_result_mac(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.error == ""
@@ -918,7 +958,7 @@ def test_run_once_verification_handles_unprintable_delete_result_status(tmp_path
         def __repr__(self):
             raise RuntimeError("bad status repr")
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -927,6 +967,7 @@ def test_run_once_verification_handles_unprintable_delete_result_status(tmp_path
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
@@ -943,6 +984,7 @@ def test_run_once_verification_handles_unprintable_delete_result_status(tmp_path
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.error == ""
@@ -981,7 +1023,7 @@ def test_run_once_verification_tolerates_unreadable_delete_results(tmp_path):
         def __iter__(self):
             raise RuntimeError("bad delete result iterator")
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -990,6 +1032,7 @@ def test_run_once_verification_tolerates_unreadable_delete_results(tmp_path):
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: UnreadableDeleteResults(  # type: ignore[method-assign]
@@ -1008,6 +1051,7 @@ def test_run_once_verification_tolerates_unreadable_delete_results(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.error == ""
@@ -1021,7 +1065,7 @@ def test_run_once_verification_treats_malformed_delete_result_as_failure(tmp_pat
         mac = "aa:bb:cc:00:00:01"
         command = "cmd"
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1030,6 +1074,7 @@ def test_run_once_verification_treats_malformed_delete_result_as_failure(tmp_pat
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: [MalformedDeleteResult()]  # type: ignore[method-assign]
@@ -1038,6 +1083,7 @@ def test_run_once_verification_treats_malformed_delete_result_as_failure(tmp_pat
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
     )
 
     assert summary.error == ""
@@ -1050,12 +1096,13 @@ def test_run_once_verification_treats_malformed_delete_result_as_failure(tmp_pat
 
 
 def test_run_once_can_cancel_during_countdown(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     query_conn = FakeConnection(
         responses={"no paging": "", "show global-user-table list role profiling": [first_query]}
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     checks = iter([False, True])
@@ -1064,6 +1111,7 @@ def test_run_once_can_cancel_during_countdown(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=3),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         should_cancel=lambda: next(checks, True),
     )
 
@@ -1074,13 +1122,14 @@ def test_run_once_can_cancel_during_countdown(tmp_path):
 
 
 def test_run_once_cancels_when_cancel_check_fails_during_countdown(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     query_conn = FakeConnection(
         responses={"no paging": "", "show global-user-table list role profiling": [first_query]}
     )
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1091,6 +1140,7 @@ def test_run_once_cancels_when_cancel_check_fails_during_countdown(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=3),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
         should_cancel=failing_cancel_check,
     )
@@ -1104,7 +1154,7 @@ def test_run_once_cancels_when_cancel_check_fails_during_countdown(tmp_path):
 
 
 def test_run_once_cancels_when_countdown_sleep_fails(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     query_conn = FakeConnection(
         responses={"no paging": "", "show global-user-table list role profiling": [first_query]}
     )
@@ -1115,6 +1165,7 @@ def test_run_once_cancels_when_countdown_sleep_fails(tmp_path):
 
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=failing_sleep,
     )
 
@@ -1122,6 +1173,7 @@ def test_run_once_cancels_when_countdown_sleep_fails(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=3),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -1135,7 +1187,7 @@ def test_run_once_cancels_when_countdown_sleep_fails(tmp_path):
 
 
 def test_run_once_can_cancel_during_delete_loop_before_next_mac(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1145,6 +1197,7 @@ def test_run_once_can_cancel_during_delete_loop_before_next_mac(tmp_path):
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     checks = iter([False, False, True])
@@ -1153,6 +1206,7 @@ def test_run_once_can_cancel_during_delete_loop_before_next_mac(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         should_cancel=lambda: next(checks, True),
     )
 
@@ -1166,8 +1220,8 @@ def test_run_once_can_cancel_during_delete_loop_before_next_mac(tmp_path):
 
 def test_run_once_cancels_when_cancel_check_fails_during_delete_loop(tmp_path):
     first_query = (
-        "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling\n"
-        "10.1.1.11 aa:bb:cc:00:00:02 user-b profiling"
+        "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling\n"
+        "192.0.2.11 aa:bb:cc:00:00:02 user-b profiling"
     )
     connection = FakeConnection(
         responses={
@@ -1178,6 +1232,7 @@ def test_run_once_cancels_when_cancel_check_fails_during_delete_loop(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     first_check = True
@@ -1193,6 +1248,7 @@ def test_run_once_cancels_when_cancel_check_fails_during_delete_loop(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
         should_cancel=cancel_check,
     )
@@ -1210,7 +1266,7 @@ def test_run_once_cancels_when_cancel_check_fails_during_delete_loop(tmp_path):
 
 
 def test_run_once_skips_verify_when_canceled_after_delete_loop(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1220,6 +1276,7 @@ def test_run_once_skips_verify_when_canceled_after_delete_loop(tmp_path):
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     checks = iter([False, False, True])
@@ -1228,6 +1285,7 @@ def test_run_once_skips_verify_when_canceled_after_delete_loop(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         should_cancel=lambda: next(checks, True),
     )
 
@@ -1241,7 +1299,7 @@ def test_run_once_cancel_after_delete_tolerates_unreadable_delete_results(tmp_pa
         def __iter__(self):
             raise RuntimeError("bad delete result iterator")
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1250,6 +1308,7 @@ def test_run_once_cancel_after_delete_tolerates_unreadable_delete_results(tmp_pa
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: UnreadableDeleteResults(  # type: ignore[method-assign]
@@ -1269,6 +1328,7 @@ def test_run_once_cancel_after_delete_tolerates_unreadable_delete_results(tmp_pa
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         should_cancel=lambda: next(checks, True),
     )
 
@@ -1285,7 +1345,7 @@ def test_run_once_cancel_after_delete_treats_unreadable_success_as_failure(tmp_p
         def __bool__(self):
             raise RuntimeError("bad success bool")
 
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1294,6 +1354,7 @@ def test_run_once_cancel_after_delete_treats_unreadable_success_as_failure(tmp_p
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
     runner._delete_macs = lambda *_args, **_kwargs: [  # type: ignore[method-assign]
@@ -1311,6 +1372,7 @@ def test_run_once_cancel_after_delete_treats_unreadable_success_as_failure(tmp_p
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         should_cancel=lambda: next(checks, True),
     )
 
@@ -1344,6 +1406,7 @@ def test_zero_query_writes_audit_without_delete(tmp_path):
     query_conn = FakeConnection(responses={"no paging": "", "show global-user-table list role profiling": ""})
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1379,6 +1442,7 @@ def test_run_once_keeps_summary_when_session_close_fails(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -1393,6 +1457,7 @@ def test_non_string_query_response_is_reported_without_delete(tmp_path):
     query_conn = FakeConnection(responses={"no paging": "", "show global-user-table list role profiling": None})
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1437,6 +1502,7 @@ def test_progress_callback_failure_does_not_abort_run(tmp_path):
     query_conn = FakeConnection(responses={"no paging": "", "show global-user-table list role profiling": ""})
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: query_conn,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1447,6 +1513,7 @@ def test_progress_callback_failure_does_not_abort_run(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=failing_progress,
     )
 
@@ -1457,7 +1524,7 @@ def test_progress_callback_failure_does_not_abort_run(tmp_path):
 
 
 def test_persistent_runner_reuses_session_until_closed(tmp_path):
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -1468,14 +1535,25 @@ def test_persistent_runner_reuses_session_until_closed(tmp_path):
     factory_calls = []
     runner = MmCleanupRunner(
         connection_factory=lambda config, _timeout: factory_calls.append(config) or connection,
+        enforce_connection_safety=False,
         persistent_session=True,
         sleep_func=lambda _seconds: None,
     )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
-    first_summary = runner.run_once(config, settings, output_dir=tmp_path)
-    second_summary = runner.run_once(config, settings, output_dir=tmp_path)
+    first_summary = runner.run_once(
+        config,
+        settings,
+        output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
+    )
+    second_summary = runner.run_once(
+        config,
+        settings,
+        output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
+    )
 
     assert first_summary.delete_success_count == 1
     assert second_summary.delete_success_count == 1
@@ -1495,7 +1573,7 @@ def test_persistent_runner_survives_repeated_query_reconnects(tmp_path):
             super().__init__(
                 responses={
                     "no paging": "",
-                    query_command: ["10.1.1.10 aa:bb:cc:00:00:01 user-a profiling", ""],
+                    query_command: ["192.0.2.10 aa:bb:cc:00:00:01 user-a profiling", ""],
                     "aaa user delete mac aa:bb:cc:00:00:01": "User deleted",
                 }
             )
@@ -1517,6 +1595,7 @@ def test_persistent_runner_survives_repeated_query_reconnects(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         persistent_session=True,
         sleep_func=lambda _seconds: None,
     )
@@ -1530,6 +1609,7 @@ def test_persistent_runner_survives_repeated_query_reconnects(tmp_path):
                 config,
                 settings,
                 output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
                 progress_callback=lambda event, payload: events.append((event, payload)),
             )
         )
@@ -1559,6 +1639,7 @@ def test_stale_session_reconnects_and_retries_command_once(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1566,6 +1647,7 @@ def test_stale_session_reconnects_and_retries_command_once(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -1594,6 +1676,7 @@ def test_stale_session_retries_even_when_initial_error_text_fails(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1601,6 +1684,7 @@ def test_stale_session_retries_even_when_initial_error_text_fails(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -1629,6 +1713,7 @@ def test_reconnect_failure_reports_initial_and_retry_errors(tmp_path):
 
     runner = MmCleanupRunner(
         connection_factory=failing_factory,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1636,6 +1721,7 @@ def test_reconnect_failure_reports_initial_and_retry_errors(tmp_path):
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -1655,7 +1741,10 @@ def test_session_disconnects_retry_connection_after_retry_command_failure():
     retry_connection = FakeConnection(responses={"no paging": ""}, failures={command: RuntimeError("socket still closed")})
     connections = [stale_connection, retry_connection]
     events = []
-    session = MmSession(connection_factory=lambda _config, _timeout: connections.pop(0))
+    session = MmSession(
+        connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
+    )
     config = MmConnectionConfig(host="192.0.2.10", username="admin", password="secret")
     settings = CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0)
 
@@ -1687,6 +1776,7 @@ def test_delete_macs_sends_one_command_per_normalized_mac():
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1715,6 +1805,7 @@ def test_delete_macs_skips_unstrippable_mac_items():
     )
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1736,6 +1827,7 @@ def test_delete_macs_tolerates_invalid_mac_container():
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1760,6 +1852,7 @@ def test_delete_macs_tolerates_unreadable_mac_container():
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1780,6 +1873,7 @@ def test_delete_macs_records_invalid_mac_without_sending_command():
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1803,6 +1897,7 @@ def test_delete_macs_skips_missing_mac_values_without_sending_command():
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1824,6 +1919,7 @@ def test_delete_command_exception_is_unknown_without_retry():
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1859,6 +1955,7 @@ def test_delete_command_exception_with_unprintable_error_is_unknown_without_retr
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1893,6 +1990,7 @@ def test_delete_command_exception_closes_session_before_next_mac_without_retry()
     connections = [stale_connection, fresh_connection]
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connections.pop(0),
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -1951,6 +2049,7 @@ def test_audit_save_failure_does_not_break_summary(tmp_path):
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -2412,6 +2511,7 @@ def test_run_once_audit_unprintable_write_failure_keeps_summary(tmp_path, monkey
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -2419,6 +2519,7 @@ def test_run_once_audit_unprintable_write_failure_keeps_summary(tmp_path, monkey
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 
@@ -2433,7 +2534,7 @@ def test_run_once_history_unprintable_write_failure_keeps_summary(tmp_path, monk
         raise BadErrorText()
 
     monkeypatch.setattr("aruba_mm_cleanup.cleanup.append_history_records", failing_append_history_records)
-    first_query = "10.1.1.10 aa:bb:cc:00:00:01 user-a profiling"
+    first_query = "192.0.2.10 aa:bb:cc:00:00:01 user-a profiling"
     connection = FakeConnection(
         responses={
             "no paging": "",
@@ -2444,6 +2545,7 @@ def test_run_once_history_unprintable_write_failure_keeps_summary(tmp_path, monk
     events = []
     runner = MmCleanupRunner(
         connection_factory=lambda _config, _timeout: connection,
+        enforce_connection_safety=False,
         sleep_func=lambda _seconds: None,
     )
 
@@ -2451,6 +2553,7 @@ def test_run_once_history_unprintable_write_failure_keeps_summary(tmp_path, monk
         MmConnectionConfig(host="192.0.2.10", username="admin", password="secret"),
         CleanupSettings(role="profiling", timeout=5, delete_delay_seconds=0),
         output_dir=tmp_path,
+        approve_targets=lambda _plan: True,
         progress_callback=lambda event, payload: events.append((event, payload)),
     )
 

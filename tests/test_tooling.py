@@ -1,8 +1,8 @@
+import configparser
+import re
 import subprocess
 import sys
 import zipfile
-import configparser
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,9 +14,10 @@ from tools.verify_release_package import (
     _read_zip_names,
     _smoke_gui,
     _smoke_web,
+)
+from tools.verify_release_package import (
     main as verifier_main,
 )
-
 
 RELEASE_ZIP_REQUIRED_FILES = [
     "README_START_HERE_KO.txt",
@@ -27,6 +28,14 @@ RELEASE_ZIP_REQUIRED_FILES = [
     "web/start_webapp.cmd",
     "web/config/mock_scenarios/profiling_users.txt",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _secure_cli_password_prompts(monkeypatch):
+    monkeypatch.setattr(
+        "aruba_mm_cleanup.cli.getpass.getpass",
+        lambda prompt: "" if prompt.startswith("Enable") else "secret",
+    )
 
 
 def write_release_zip(zip_path, extra_names=()):
@@ -40,7 +49,7 @@ def write_release_zip(zip_path, extra_names=()):
 def test_release_zip_verifier_checks_required_files(tmp_path):
     repo_root = Path(__file__).parents[1]
     verifier = repo_root / "tools" / "verify_release_package.py"
-    zip_path = tmp_path / "aruba-mm-cleanup_v0.1.0_windows.zip"
+    zip_path = tmp_path / "aruba-mm-session-cleanup_v0.2.0_windows.zip"
     write_release_zip(zip_path)
 
     completed = subprocess.run(
@@ -524,6 +533,8 @@ def test_cli_help_distinguishes_timeout_from_delete_delay():
     assert "device response timeout seconds" in output
     assert "--delay" in output
     assert "countdown seconds between query and delete" in output
+    assert "--password" not in output
+    assert "--enable-password" not in output
 
 
 def test_cli_rejects_out_of_range_port_before_connecting():
@@ -536,11 +547,8 @@ def test_cli_rejects_out_of_range_port_before_connecting():
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--port",
             "0",
-            "--yes",
         ],
         capture_output=True,
         text=True,
@@ -562,11 +570,8 @@ def test_cli_rejects_non_positive_timeout_before_connecting():
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--timeout",
             "0",
-            "--yes",
         ],
         capture_output=True,
         text=True,
@@ -596,7 +601,7 @@ def test_cli_uses_actual_one_second_timeout(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -604,11 +609,8 @@ def test_cli_uses_actual_one_second_timeout(monkeypatch):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--timeout",
             "1",
-            "--yes",
         ]
     )
 
@@ -626,11 +628,8 @@ def test_cli_rejects_negative_delay_before_connecting():
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--delay",
             "-1",
-            "--yes",
         ],
         capture_output=True,
         text=True,
@@ -660,7 +659,7 @@ def test_cli_uses_actual_zero_delete_delay(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -668,11 +667,8 @@ def test_cli_uses_actual_zero_delete_delay(monkeypatch):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--delay",
             "0",
-            "--yes",
         ]
     )
 
@@ -693,9 +689,6 @@ def test_cli_rejects_empty_host_before_connecting(monkeypatch, capsys):
                 " ",
                 "--username",
                 "admin",
-                "--password",
-                "secret",
-                "--yes",
             ]
         )
     except SystemExit as exc:
@@ -703,14 +696,14 @@ def test_cli_rejects_empty_host_before_connecting(monkeypatch, capsys):
     else:
         raise AssertionError("CLI should reject empty host")
 
-    assert "--host must not be empty" in capsys.readouterr().err
+    assert "MM 주소" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
     ("option", "value", "expected_error"),
     [
-        ("--host", "192.0.2.10", "--host must not be empty"),
-        ("--username", "admin", "--username must not be empty"),
+        ("--host", "192.0.2.10", "MM 주소"),
+        ("--username", "admin", "계정"),
         ("--role", "profiling", "Role"),
     ],
 )
@@ -734,11 +727,8 @@ def test_cli_rejects_unstrippable_text_args_before_connecting(
         "192.0.2.10",
         "--username",
         "admin",
-        "--password",
-        "secret",
         "--role",
         "profiling",
-        "--yes",
     ]
     args[args.index(option) + 1] = BadStripArg(value)
 
@@ -765,9 +755,6 @@ def test_cli_rejects_empty_username_before_connecting(monkeypatch, capsys):
                 "192.0.2.10",
                 "--username",
                 " ",
-                "--password",
-                "secret",
-                "--yes",
             ]
         )
     except SystemExit as exc:
@@ -775,7 +762,7 @@ def test_cli_rejects_empty_username_before_connecting(monkeypatch, capsys):
     else:
         raise AssertionError("CLI should reject empty username")
 
-    assert "--username must not be empty" in capsys.readouterr().err
+    assert "계정" in capsys.readouterr().err
 
 
 def test_cli_rejects_role_control_characters_before_connecting():
@@ -788,11 +775,8 @@ def test_cli_rejects_role_control_characters_before_connecting():
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--role",
             "profiling\nshow version",
-            "--yes",
         ],
         capture_output=True,
         text=True,
@@ -810,19 +794,37 @@ def test_cli_treats_missing_confirmation_input_as_cancel(monkeypatch, capsys):
 
     monkeypatch.setattr("builtins.input", raise_eof)
 
+    class FakeRunner:
+        def run_once(self, *_args, **kwargs):
+            approved = kwargs["approve_targets"](
+                SimpleNamespace(role="profiling", target_macs=("02:00:00:00:00:01",))
+            )
+            return SimpleNamespace(
+                queried_count=1,
+                delete_success_count=0,
+                delete_failure_count=0,
+                remaining_count=1,
+                reappeared_count=0,
+                audit_path=None,
+                audit_error="",
+                history_error="",
+                error="",
+                canceled=not approved,
+            )
+
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
+
     result = cli_main(
         [
             "--host",
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
         ]
     )
 
     assert result == 1
-    assert "Canceled before query." in capsys.readouterr().out
+    assert "Canceled before deletion approval." in capsys.readouterr().out
 
 
 def test_cli_treats_missing_password_input_as_cancel(monkeypatch, capsys):
@@ -837,7 +839,6 @@ def test_cli_treats_missing_password_input_as_cancel(monkeypatch, capsys):
             "192.0.2.10",
             "--username",
             "admin",
-            "--yes",
         ]
     )
 
@@ -860,7 +861,7 @@ def test_cli_reports_history_save_warning(monkeypatch, capsys, tmp_path):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -868,9 +869,6 @@ def test_cli_reports_history_save_warning(monkeypatch, capsys, tmp_path):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -913,7 +911,7 @@ def test_cli_handles_malformed_summary_without_attribute_error(monkeypatch, caps
         def run_once(self, *_args, **_kwargs):
             return MalformedSummary()
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -921,9 +919,6 @@ def test_cli_handles_malformed_summary_without_attribute_error(monkeypatch, caps
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -941,7 +936,7 @@ def test_cli_reports_unexpected_runner_failure(monkeypatch, capsys):
         def run_once(self, *_args, **_kwargs):
             raise RuntimeError("runner exploded")
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -949,9 +944,6 @@ def test_cli_reports_unexpected_runner_failure(monkeypatch, capsys):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -982,7 +974,7 @@ def test_cli_handles_unprintable_summary_values(monkeypatch, capsys):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -990,9 +982,6 @@ def test_cli_handles_unprintable_summary_values(monkeypatch, capsys):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -1023,7 +1012,7 @@ def test_cli_handles_unreadable_summary_truthiness(monkeypatch, capsys):
                 error=BadBool(),
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1031,9 +1020,6 @@ def test_cli_handles_unreadable_summary_truthiness(monkeypatch, capsys):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -1071,7 +1057,7 @@ def test_cli_handles_malformed_progress_payload(monkeypatch, capsys):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1079,9 +1065,6 @@ def test_cli_handles_malformed_progress_payload(monkeypatch, capsys):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -1110,7 +1093,7 @@ def test_cli_expands_user_home_output_dir(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1118,11 +1101,8 @@ def test_cli_expands_user_home_output_dir(monkeypatch):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--output-dir",
             "~/aruba-cli-output",
-            "--yes",
         ]
     )
 
@@ -1148,7 +1128,7 @@ def test_cli_strips_host_before_connecting(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1156,9 +1136,6 @@ def test_cli_strips_host_before_connecting(monkeypatch):
             " 192.0.2.10 ",
             "--username",
             "admin",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -1184,7 +1161,7 @@ def test_cli_strips_username_before_connecting(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1192,9 +1169,6 @@ def test_cli_strips_username_before_connecting(monkeypatch):
             "192.0.2.10",
             "--username",
             " admin ",
-            "--password",
-            "secret",
-            "--yes",
         ]
     )
 
@@ -1220,7 +1194,7 @@ def test_cli_strips_role_before_running(monkeypatch):
                 error="",
             )
 
-    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda: FakeRunner())
+    monkeypatch.setattr("aruba_mm_cleanup.cli.MmCleanupRunner", lambda **_kwargs: FakeRunner())
 
     result = cli_main(
         [
@@ -1228,11 +1202,8 @@ def test_cli_strips_role_before_running(monkeypatch):
             "192.0.2.10",
             "--username",
             "admin",
-            "--password",
-            "secret",
             "--role",
             " profiling ",
-            "--yes",
         ]
     )
 
@@ -1250,11 +1221,14 @@ def test_windows_build_and_docs_reference_gui_web_release_contract():
         assert "ArubaMMCleanupGUI" in text
         assert "ArubaMMCleanupWeb" in text
         assert "ArubaMMCleanupCLI.exe" not in text
-    assert "aruba-mm-cleanup_vYYYY.MM.DD-HHMMSS_windows.zip" in readme
+    assert "aruba-mm-session-cleanup_v0.2.0_windows.zip" in readme
+    assert "aruba-mm-session-cleanup_v0.2.0_windows.zip.sha256" in readme
+    assert "aruba-mm-session-cleanup_v0.2.0_sbom.cdx.json" in readme
     assert "python .\\tools\\verify_release_package.py --dist .\\dist --smoke-gui --smoke-web" in readme
     assert "README_START_HERE_KO.txt" in readme
     assert "web\\start_webapp.cmd" in readme
     assert "Source code (zip)" in readme
+    assert "--require-hashes" in build_script
     assert '-c ".\\constraints.txt"' in build_script
     assert "-m pip check" in build_script
     assert "pip install failed with exit code $LASTEXITCODE" in build_script
@@ -1268,36 +1242,28 @@ def test_github_actions_release_contract():
     release_workflow = (repo_root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "pull_request:" in pr_workflow
+    assert "branches: [main]" in pr_workflow
     assert "gh release" not in pr_workflow
     assert "push:" in release_workflow
-    assert "branches: [main]" in release_workflow
-    assert "Korea Standard Time" in release_workflow
-    assert "yyyy.MM.dd-HHmmss" in release_workflow
-    assert 'aruba-mm-cleanup_${candidate}_windows.zip' in release_workflow
+    assert '"v[0-9]*.[0-9]*.[0-9]*"' in release_workflow
+    assert '"!v*-*"' in release_workflow
+    assert "-notmatch '^v\\d+\\.\\d+\\.\\d+$'" in release_workflow
+    assert 'if ($tag -ne "v$version")' in release_workflow
+    assert 'aruba-mm-session-cleanup_${tag}_windows.zip' in release_workflow
+    assert 'aruba-mm-session-cleanup_${tag}_sbom.cdx.json' in release_workflow
     assert "Get-FileHash -Algorithm SHA256" in release_workflow
-    assert ".sha256" not in release_workflow.replace("outputs.sha256", "")
+    assert ".sha256" in release_workflow
+    assert "cyclonedx-py environment" in release_workflow
+    assert "pip_audit" in release_workflow
+    assert "bandit" in release_workflow
     assert "gh release create" in release_workflow
     assert release_workflow.count("#${{ steps.metadata.outputs.asset_name }}") == 1
-    assert '--title "Aruba MM Cleanup ${{ steps.metadata.outputs.tag }}"' in release_workflow
+    assert release_workflow.count("#${{ steps.metadata.outputs.checksum_name }}") == 1
+    assert release_workflow.count("#${{ steps.metadata.outputs.sbom_name }}") == 1
+    assert '--title "Aruba MM Session Cleanup ${{ steps.metadata.outputs.tag }}"' in release_workflow
     assert "--draft=false" in release_workflow
-    assert "# Aruba MM Cleanup $tag" in release_workflow
-    assert "## 변경 내용" in release_workflow
-    assert "## 변경 커밋 목록" in release_workflow
-    assert "기준 커밋 SHA" in release_workflow
-    assert "브랜치명" in release_workflow
-    assert "## 검증 명령" in release_workflow
-    assert "## 빌드 명령" in release_workflow
-    assert "통합 ZIP 파일명" in release_workflow
-    assert "SHA256 checksum" in release_workflow
-    assert "## GUI 실행 방법" in release_workflow
-    assert "## 웹앱 실행 방법" in release_workflow
-    assert "Source code (zip)" in release_workflow
-    assert 'git log --format="%H"' in release_workflow
-    assert "Release-Note-KO:" in release_workflow
-    assert "Korean release note is required" in release_workflow
-    assert '$releaseNote -notmatch "[가-힣]"' in release_workflow
-    assert '$changeSummary.Add("- $releaseNote ($shortHash)")' in release_workflow
-    assert "CHANGELOG.md" not in release_workflow
+    assert '--notes-file ".\\RELEASE_NOTES.md"' in release_workflow
+    assert "--cleanup-tag" not in release_workflow
     assert "--smoke-gui --smoke-web --require-gui-smoke --require-web-smoke" in release_workflow
     assert "--smoke-cli" not in release_workflow
     assert "ArubaMMCleanupCLI.exe" not in release_workflow

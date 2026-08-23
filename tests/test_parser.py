@@ -2,7 +2,6 @@ from pathlib import Path
 
 from aruba_mm_cleanup.parser import normalize_mac, parse_global_user_table, parse_global_user_table_explained
 
-
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -17,9 +16,9 @@ def test_parse_global_user_table_extracts_user_mac_only():
 Global User Table
 -----------------
 IP              MAC Address          User          Role        VLAN  BSSID
-10.1.1.10       aa:bb:cc:00:00:01    user-a        profiling   20    11:22:33:44:55:66
-10.1.1.11       aa-bb-cc-00-00-02    user-b        employee    30    22:33:44:55:66:77
-10.1.1.12       aabb.cc00.0003       user-c        profiling   20    33:44:55:66:77:88
+192.0.2.10       aa:bb:cc:00:00:01    user-a        profiling   20    11:22:33:44:55:66
+192.0.2.11       aa-bb-cc-00-00-02    user-b        employee    30    22:33:44:55:66:77
+192.0.2.12       aabb.cc00.0003       user-c        profiling   20    33:44:55:66:77:88
 """
 
     entries = parse_global_user_table(output, role_filter="profiling")
@@ -28,14 +27,14 @@ IP              MAC Address          User          Role        VLAN  BSSID
         "aa:bb:cc:00:00:01",
         "aa:bb:cc:00:00:03",
     ]
-    assert entries[0].ip_address == "10.1.1.10"
+    assert entries[0].ip_address == "192.0.2.10"
     assert entries[0].username == "user-a"
 
 
 def test_parse_global_user_table_uses_default_role_when_role_filter_is_none():
     output = """
-10.1.1.10 aa:bb:cc:00:00:01 user-a profiling
-10.1.1.11 aa:bb:cc:00:00:02 user-b employee
+192.0.2.10 aa:bb:cc:00:00:01 user-a profiling
+192.0.2.11 aa:bb:cc:00:00:02 user-b employee
 """
 
     entries = parse_global_user_table(output, role_filter=None)  # type: ignore[arg-type]
@@ -49,8 +48,8 @@ def test_parse_global_user_table_uses_default_role_when_role_filter_strip_fails(
             raise RuntimeError("bad strip")
 
     output = """
-10.1.1.10 aa:bb:cc:00:00:01 user-a profiling
-10.1.1.11 aa:bb:cc:00:00:02 user-b employee
+192.0.2.10 aa:bb:cc:00:00:01 user-a profiling
+192.0.2.11 aa:bb:cc:00:00:02 user-b employee
 """
 
     entries = parse_global_user_table(output, role_filter=BadRole("profiling"))  # type: ignore[arg-type]
@@ -72,8 +71,8 @@ def test_parse_global_user_table_records_type_na_from_header():
     output = "\n".join(
         [
             header,
-            f"{'10.1.1.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}",
-            f"{'10.1.1.11':<16}{'aa:bb:cc:00:00:02':<21}{'user-b':<14}{'profiling':<12}{'user':<8}{'22:33:44:55:66:77'}",
+            f"{'192.0.2.10':<16}{'aa:bb:cc:00:00:01':<21}{'user-a':<14}{'profiling':<12}{'N/A':<8}{'11:22:33:44:55:66'}",
+            f"{'192.0.2.11':<16}{'aa:bb:cc:00:00:02':<21}{'user-b':<14}{'profiling':<12}{'user':<8}{'22:33:44:55:66:77'}",
         ]
     )
 
@@ -91,8 +90,8 @@ def test_parse_global_user_table_records_type_na_from_header():
 
 def test_parse_global_user_table_deduplicates_user_macs():
     output = """
-10.1.1.10 aa:bb:cc:00:00:01 user-a profiling 11:22:33:44:55:66
-10.1.1.10 aa:bb:cc:00:00:01 user-a profiling 22:33:44:55:66:77
+192.0.2.10 aa:bb:cc:00:00:01 user-a profiling 11:22:33:44:55:66
+192.0.2.10 aa:bb:cc:00:00:01 user-a profiling 22:33:44:55:66:77
 """
 
     entries = parse_global_user_table(output, role_filter="profiling")
@@ -103,7 +102,7 @@ def test_parse_global_user_table_deduplicates_user_macs():
 def test_parse_global_user_table_ignores_trailing_bssid_when_role_is_absent():
     output = """
 User             IP              MAC                BSSID
-user-a           10.1.1.10       aa:bb:cc:00:00:01  11:22:33:44:55:66
+user-a           192.0.2.10       aa:bb:cc:00:00:01  11:22:33:44:55:66
 """
 
     entries = parse_global_user_table(output, role_filter="profiling")
@@ -129,8 +128,8 @@ def test_parse_ignores_row_when_username_matches_filter_but_role_differs():
 Global User Table
 -----------------
 IP              MAC Address          User          Role        VLAN
-10.1.1.10       aa:bb:cc:00:00:01    profiling     employee    30
-10.1.1.11       aa:bb:cc:00:00:02    user-a        profiling   20
+192.0.2.10       aa:bb:cc:00:00:01    profiling     employee    30
+192.0.2.11       aa:bb:cc:00:00:02    user-a        profiling   20
 """
 
     result = parse_global_user_table_explained(output, role_filter="profiling")

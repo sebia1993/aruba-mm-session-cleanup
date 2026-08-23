@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aruba-mm-cleanup"
-version = "0.1.0"
-description = "Windows dashboard for Aruba Mobility Master profiling-role MAC cleanup."
+name = "aruba-mm-session-cleanup"
+version = "0.2.0"
+description = "Fail-closed Aruba Mobility session cleanup with explicit operator approval."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = [
   "netmiko>=4.3.0",
@@ -13,8 +16,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "bandit>=1.8.6",
+  "cyclonedx-bom>=7.3.1",
+  "pip-audit>=2.9.0",
+  "pip-tools>=7.6.1",
   "pyinstaller>=6.0",
   "pytest>=8.0",
+  "ruff>=0.12.12",
 ]
 
 [project.scripts]
@@ -24,3 +32,17 @@ aruba-mm-cleanup-web = "aruba_mm_cleanup.web_app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "dist", ".pyinstaller_build"]
