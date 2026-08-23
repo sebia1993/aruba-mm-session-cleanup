@@ -5,12 +5,18 @@ on:
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
       - "!v*-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing semantic version tag to build and publish"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +30,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -43,10 +50,34 @@ jobs:
       - name: Verify semantic version tag
         id: metadata
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ inputs.tag || github.ref_name }}"
           if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Tag $tag is not a semantic version tag."
+          }
+          $tagObjectType = git cat-file -t "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0 -or $tagObjectType -ne "tag") {
+            throw "Tag $tag must be an existing annotated tag."
+          }
+          $headCommit = git rev-parse HEAD
+          $tagCommit = git rev-list -n 1 $tag
+          if ($LASTEXITCODE -ne 0 -or $headCommit -ne $tagCommit) {
+            throw "Checked-out commit $headCommit does not match tag $tag ($tagCommit)."
+          }
+          $releaseUri = "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag"
+          $releaseHeaders = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $releaseResponse = Invoke-WebRequest -Uri $releaseUri -Headers $releaseHeaders -SkipHttpErrorCheck
+          if ($releaseResponse.StatusCode -eq 200) {
+            throw "Release $tag already exists; refusing to overwrite it."
+          }
+          if ($releaseResponse.StatusCode -ne 404) {
+            throw "Could not safely confirm that Release $tag is absent (HTTP $($releaseResponse.StatusCode))."
           }
           $version = python -c "from aruba_mm_cleanup import __version__; print(__version__)"
           if ($LASTEXITCODE -ne 0) { throw "Version lookup failed." }
@@ -96,8 +127,14 @@ jobs:
           $checksumPath = Join-Path $assetDir $checksumName
           "$sha256  $assetName" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
           $sbomPath = Join-Path $assetDir $sbomName
-          cyclonedx-py environment python --pyproject pyproject.toml --output-reproducible --output-format JSON --output-file $sbomPath
+          $pythonExe = (Get-Command python -ErrorAction Stop).Source
+          cyclonedx-py environment $pythonExe --pyproject pyproject.toml --output-reproducible --output-format JSON --output-file $sbomPath
+          if ($LASTEXITCODE -ne 0) { throw "CycloneDX SBOM generation failed." }
+          if (-not (Test-Path -LiteralPath $sbomPath -PathType Leaf) -or (Get-Item -LiteralPath $sbomPath).Length -le 0) {
+            throw "CycloneDX SBOM file is missing or empty."
+          }
           python -c "import json; json.load(open(r'$sbomPath', encoding='utf-8'))"
+          if ($LASTEXITCODE -ne 0) { throw "CycloneDX SBOM JSON validation failed." }
           "asset_path=$assetPath" >> $env:GITHUB_OUTPUT
           "checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
           "sbom_path=$sbomPath" >> $env:GITHUB_OUTPUT
