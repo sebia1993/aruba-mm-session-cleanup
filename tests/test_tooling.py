@@ -1245,15 +1245,24 @@ def test_github_actions_release_contract():
     assert "branches: [main]" in pr_workflow
     assert "gh release" not in pr_workflow
     assert "push:" in release_workflow
+    assert "workflow_dispatch:" in release_workflow
+    assert 'ref: ${{ inputs.tag || github.ref }}' in release_workflow
     assert '"v[0-9]*.[0-9]*.[0-9]*"' in release_workflow
     assert '"!v*-*"' in release_workflow
     assert "-notmatch '^v\\d+\\.\\d+\\.\\d+$'" in release_workflow
     assert 'if ($tag -ne "v$version")' in release_workflow
+    assert "must be an existing annotated tag" in release_workflow
+    assert "does not match tag" in release_workflow
+    assert "already exists; refusing to overwrite it" in release_workflow
     assert 'aruba-mm-session-cleanup_${tag}_windows.zip' in release_workflow
     assert 'aruba-mm-session-cleanup_${tag}_sbom.cdx.json' in release_workflow
     assert "Get-FileHash -Algorithm SHA256" in release_workflow
     assert ".sha256" in release_workflow
     assert "cyclonedx-py environment" in release_workflow
+    assert "(Get-Command python -ErrorAction Stop).Source" in release_workflow
+    assert 'throw "CycloneDX SBOM generation failed."' in release_workflow
+    assert 'throw "CycloneDX SBOM file is missing or empty."' in release_workflow
+    assert 'throw "CycloneDX SBOM JSON validation failed."' in release_workflow
     assert "pip_audit" in release_workflow
     assert "bandit" in release_workflow
     assert "gh release create" in release_workflow
