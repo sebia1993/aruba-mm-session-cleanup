@@ -1,8 +1,8 @@
-netmiko==4.6.0
-bandit==1.8.6
+netmiko==4.7.0
+bandit==1.9.4
 cyclonedx-bom==7.3.1
-pip-audit==2.9.0
+pip-audit==2.10.1
 pip-tools==7.6.1
-pyinstaller==6.21.0
-pytest==8.4.2
-ruff==0.12.12
+pyinstaller==6.22.2
+pytest==9.1.1
+ruff==0.16.5
