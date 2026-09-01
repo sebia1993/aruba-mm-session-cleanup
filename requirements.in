@@ -1,2 +1,2 @@
 # Runtime dependency input for requirements.lock.
-netmiko==4.6.0
+netmiko==4.7.0
