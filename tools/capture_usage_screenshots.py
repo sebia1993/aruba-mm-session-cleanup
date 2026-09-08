@@ -28,7 +28,10 @@ def main() -> None:
         gui.DEFAULT_OUTPUT_DIR = Path(directory)
         app = gui.ArubaMmCleanupGui()
         try:
+            app.maxsize(1920, 1400)
             app.geometry("1400x1000+0+0")
+            app.update()
+            assert app.winfo_width() >= 1300 and app.winfo_height() >= 950, app.geometry()
             app.host_var.set("192.0.2.20")
             app.username_var.set("netops-demo")
             app.password_var.set("documentation-only")
