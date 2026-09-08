@@ -500,7 +500,7 @@ def test_read_inputs_uses_immediate_delete_and_device_timeout():
     assert config.host == "192.0.2.10"
     assert settings.timeout == 15
     assert settings.delete_delay_seconds == 0
-    assert str(output_dir) == "/tmp/aruba-mm-cleanup"
+    assert output_dir == Path("/tmp/aruba-mm-cleanup")
 
 
 def test_read_inputs_uses_actual_one_second_device_timeout():

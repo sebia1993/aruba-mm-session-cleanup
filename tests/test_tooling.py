@@ -1,4 +1,5 @@
 import configparser
+import os
 import re
 import subprocess
 import sys
@@ -1302,3 +1303,21 @@ def test_package_metadata_versions_and_dependencies_do_not_drift():
     assert "netmiko==4.6.0" in constraints
     assert "pyinstaller==6.21.0" in constraints
     assert "pytest==8.4.2" in constraints
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell native exit-code contract")
+def test_windows_validation_stops_after_native_command_failure(tmp_path):
+    script = Path(__file__).parents[1] / "tools" / "validate.ps1"
+    calls = tmp_path / "native-calls.txt"
+    # No dependency install or network: the first native command is an isolated stub.
+    (tmp_path / "python.cmd").write_text(
+        f'@echo %*>>"{calls}"\n@exit /b 7\n', encoding="utf-8"
+    )
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"])
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Validation command failed with exit code 7" in result.stderr
+    assert len(calls.read_text().splitlines()) == 1

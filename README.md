@@ -128,6 +128,14 @@ aaa user delete mac <mac>
 
 자세한 안전 상태 모델은 [SAFETY_MODEL.md](docs/SAFETY_MODEL.md)를 참고하십시오.
 
+## 실제 화면으로 보는 승인과 검증
+
+[화면별 사용 흐름](docs/USAGE_SCREENSHOTS_KO.md)에서 설정 → 조회 대상 → 최종 승인 → 결과 해석을 확인할 수 있습니다. 현재 Windows Tk 창에 합성 이벤트를 넣은 화면이며 실제 조회·삭제·재조회 실행은 하지 않았습니다. 승인 팝업은 캡처한 뒤 취소했습니다.
+
+![현재 앱의 합성 설정](docs/images/01-settings.png)
+
+![합성 결과에서 확인된 삭제와 확인 필요 구분](docs/images/04-verification.png)
+
 ## 아키텍처
 
 ```mermaid

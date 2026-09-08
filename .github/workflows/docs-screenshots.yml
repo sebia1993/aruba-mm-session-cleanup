@@ -1,0 +1,51 @@
+name: Documentation screenshots
+
+on:
+  push:
+    branches: ["codex/usage-evidence-20260908"]
+    paths:
+      - "tools/capture_windows.py"
+      - "tools/capture_usage_screenshots.py"
+      - ".github/workflows/docs-screenshots.yml"
+  pull_request:
+    paths:
+      - "tools/capture_windows.py"
+      - "tools/capture_usage_screenshots.py"
+      - ".github/workflows/docs-screenshots.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install locked application and capture-only dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw "Locked dependency installation failed" }
+          python -m pip install --no-deps pillow==12.3.0
+          if ($LASTEXITCODE -ne 0) { throw "Capture dependency installation failed" }
+      - name: Capture actual application with synthetic data and blocked network
+        shell: pwsh
+        run: |
+          python tools/capture_usage_screenshots.py --output artifacts/docs-screenshots
+          if ($LASTEXITCODE -ne 0) { throw "GUI capture failed" }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aruba-mm-session-cleanup-usage-screenshots
+          path: artifacts/docs-screenshots/
+          if-no-files-found: error
+          retention-days: 14

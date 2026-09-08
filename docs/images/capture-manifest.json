@@ -1,0 +1,29 @@
+{
+  "application": "Aruba MM Cleanup Dashboard",
+  "application_version": "0.2.0",
+  "source_commit": "b66254faf623c15ab60b3898dff436000f1e1baf",
+  "capture_os": "Windows-10-10.0.26100-SP0",
+  "python": "3.11.9",
+  "method": "Actual Tk window / PrintWindow; synthetic query/result event injection; actual approval dialog captured then cancelled; no cleanup runner execution",
+  "data": "synthetic documentation fixtures only",
+  "network": "socket connection attempts blocked; no device or account access",
+  "workflow_run": "34176299430",
+  "images": [
+    {
+      "file": "01-settings.png",
+      "sha256": "43fc27870054b06a84683e07a5a983da16201130a5730fa3c8867bdfc5d25695"
+    },
+    {
+      "file": "02-targets.png",
+      "sha256": "af9d5aa52ff81a825f529c065c0fb992bb7b49227e7202e0c68ee6015aff1fbf"
+    },
+    {
+      "file": "03-approval.png",
+      "sha256": "f1de81e131133c8fbfa27b8a7785c90eaa1d1a8dc5722eb1f70a12de23d6af8f"
+    },
+    {
+      "file": "04-verification.png",
+      "sha256": "de5aa3d29df8fb3997ebf3cf81c21d5c3c4bcd1613eddea580984c0704794ceb"
+    }
+  ]
+}
