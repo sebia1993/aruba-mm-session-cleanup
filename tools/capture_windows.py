@@ -142,3 +142,36 @@ def write_manifest(output: Path, *, app: str, version: str, method: str) -> None
     (output / "capture-manifest.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def prepare_capture_desktop() -> None:
+    """Give ephemeral Actions runners enough desktop area for real widget painting.
+
+    Tk does not paint all offscreen child surfaces, even when PrintWindow succeeds.
+    Local Windows hosts are checked but their display configuration is never changed.
+    DEVMODEW layout follows Microsoft's wingdi.h; only width/height are modified.
+    """
+    if os.name != "nt":
+        raise RuntimeError("Windows capture requires Windows")
+    import struct
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetProcessDPIAware()
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        mode = ctypes.create_string_buffer(220)
+        struct.pack_into("H", mode, 68, 220)  # dmSize in DEVMODEW
+        user32.EnumDisplaySettingsW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
+        if not user32.EnumDisplaySettingsW(None, 0xFFFFFFFF, mode):
+            raise RuntimeError("Cannot read runner display settings")
+        fields = struct.unpack_from("I", mode, 72)[0]
+        struct.pack_into("I", mode, 72, fields | 0x00080000 | 0x00100000)
+        struct.pack_into("II", mode, 172, 1920, 1080)
+        user32.ChangeDisplaySettingsW.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        result = user32.ChangeDisplaySettingsW(mode, 0)
+        if result != 0:
+            raise RuntimeError(f"Cannot set ephemeral runner display: {result}")
+        time.sleep(0.25)
+    width, height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    print(f"capture desktop: {width}x{height}")
+    if width < 1600 or height < 1050:
+        raise RuntimeError("Capture needs a desktop of at least 1600x1050; offscreen Tk regions would be blank")

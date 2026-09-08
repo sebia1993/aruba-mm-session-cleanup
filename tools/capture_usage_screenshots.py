@@ -9,7 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 
-from capture_windows import block_network, capture_window, write_manifest
+from capture_windows import block_network, capture_window, prepare_capture_desktop, write_manifest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -20,6 +20,7 @@ def main() -> None:
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    prepare_capture_desktop()
     block_network()
     from aruba_mm_cleanup import gui_app as gui
     from aruba_mm_cleanup.models import CleanupPlan, CleanupRunSummary, DeleteResult
