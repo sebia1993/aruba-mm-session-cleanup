@@ -91,7 +91,7 @@ def test_web_summary_view_tolerates_missing_and_bad_values():
 
     assert view["queried_count"] == 0
     assert view["delete_success_count"] == 2
-    assert view["audit_path"] == "outputs/cleanup_summary.json"
+    assert view["audit_path"] == str(Path("outputs/cleanup_summary.json"))
 
 
 def test_web_page_uses_cumulative_dashboard_labels(tmp_path):
